@@ -99,3 +99,37 @@ def agent(config: ConfigOption = DEFAULT_CONFIG) -> None:
         port=settings.node.agent_port,
         log_level="info",
     )
+
+
+@app.command("model")
+def show_model(
+    path: Annotated[
+        Path | None, typer.Argument(help="Path to a .gguf file; defaults to the configured model")
+    ] = None,
+    config: ConfigOption = DEFAULT_CONFIG,
+    ctx: Annotated[int, typer.Option(help="Context length for the KV cache estimate")] = 4096,
+) -> None:
+    """Inspect a GGUF model's metadata without loading it."""
+    from huddle.gguf import GGUFError, read_gguf
+
+    target = path
+    if target is None:
+        target = _load(config).models.resolve()
+
+    try:
+        info = read_gguf(target)
+    except (GGUFError, OSError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    mib = 1024 * 1024
+    typer.echo(f"{info.name or info.path.name}  [{info.architecture}, {info.quantization}]")
+    typer.echo(f"  layers          {info.n_layers}")
+    typer.echo(f"  embedding       {info.n_embd}")
+    typer.echo(f"  heads           {info.n_head} ({info.n_head_kv} kv)")
+    typer.echo(f"  trained ctx     {info.n_ctx_train}")
+    typer.echo(f"  file size       {info.file_size / mib:,.0f} MiB")
+    typer.echo(f"  tensor bytes    {info.tensor_bytes / mib:,.0f} MiB")
+    typer.echo(f"  per layer       {info.mean_layer_bytes / mib:,.1f} MiB")
+    typer.echo(f"  non-layer       {info.overhead_bytes / mib:,.1f} MiB")
+    typer.echo(f"  kv cache @{ctx}  {info.kv_cache_bytes(ctx) / mib:,.1f} MiB")
