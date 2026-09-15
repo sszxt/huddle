@@ -207,3 +207,27 @@ def test_summary_lists_every_device_including_unused() -> None:
     for device in devices:
         assert device.id in summary
     assert "unused" in summary and "skipped" in summary
+
+
+def test_scales_to_many_nodes() -> None:
+    """Nothing in the design is two-node shaped.
+
+    Eight peers with two GPUs each, plus the head: the split must stay
+    positional across all 18 devices and the layer total must be conserved.
+    """
+    devices = []
+    for node in range(8):
+        devices.append(gpu(f"RPC{node * 2}", f"peer{node}", 11000, is_rpc=True))
+        devices.append(
+            gpu(f"RPC{node * 2 + 1}", f"peer{node}", 47000, is_rpc=True, unified_memory=True)
+        )
+    devices += [gpu("Vulkan0", "head", 11000), gpu("Vulkan1", "head", 47000, unified_memory=True)]
+
+    plan = plan_placement(make_model(n_layers=160, layer_mib=400), devices, n_ctx=4096)
+
+    assert len(plan.tensor_split) == 18
+    assert len(plan.excluded) == 9, "every integrated GPU skipped"
+    assert plan.total_layers == plan.n_gpu_layers
+    # Head is filled first, then peers spill in order.
+    assert plan.layers_per_device[16] > 0
+    assert sum(plan.layers_per_device[:16]) > 0
