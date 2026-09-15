@@ -1,0 +1,25 @@
+# Huddle worker node: agent only, no public API.
+#
+# Use this on cluster peers that only run ggml-rpc-server. The agent control
+# API has no authentication — bind it to a private interface and firewall it.
+
+[Unit]
+Description=Huddle node agent
+Documentation=https://github.com/sszxt/huddle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=edgeup
+WorkingDirectory=/home/edgeup/huddle
+ExecStart=/home/edgeup/.local/bin/uv run huddle agent
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=900
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,54 @@
+# Huddle node configuration.
+#
+# Copy to huddle.yaml and edit. huddle.yaml is gitignored because it holds
+# machine-specific paths and host addresses.
+
+node:
+  name: omarchy
+  agent_host: 127.0.0.1
+  agent_port: 8081
+
+# Both binaries must come from the SAME llama.cpp build: the RPC handshake
+# rejects peers whose version differs.
+binaries:
+  llama_server: /home/edgeup/llama.cpp/build/bin/llama-server
+  # NOTE: the built binary is ggml-rpc-server; upstream's README still calls it rpc-server.
+  rpc_server: /home/edgeup/llama.cpp/build/bin/ggml-rpc-server
+
+# Only the head node needs the GGUF file. It reads the model locally and streams
+# tensors to RPC peers, so there is nothing to copy to workers.
+models:
+  dir: /home/edgeup/models
+  default: qwen2.5-0.5b-instruct-q4_k_m.gguf
+
+# The head llama-server process.
+backend:
+  host: 127.0.0.1
+  port: 8080
+  ctx_size: 4096
+  parallel: 1
+  n_gpu_layers: all      # exact count, "auto", or "all"
+  extra_args: []
+
+# This node's rpc-server, when acting as a worker.
+rpc:
+  bind: 0.0.0.0          # llama.cpp defaults to 127.0.0.1, which is unreachable
+                         # from other machines. Keep 0.0.0.0 and firewall the port:
+                         # the RPC backend has no auth and no encryption.
+  port: 50052
+  cache: true            # without this, every load re-streams weights over the LAN
+  devices: []            # empty = let llama.cpp choose
+  threads: null
+
+# The public OpenAI-compatible API.
+api:
+  host: 127.0.0.1
+  port: 8000
+  api_key: null
+
+# Cluster peers. Empty for v0 (single machine).
+peers: []
+# - name: box2
+#   host: 192.168.0.55
+#   agent_port: 8081
+#   rpc_port: 50052

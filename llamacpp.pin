@@ -1,0 +1,13 @@
+# The llama.cpp build this cluster is pinned to.
+#
+# Every node MUST build from this exact commit. llama.cpp's RPC protocol
+# performs a version handshake and refuses a peer whose major version differs,
+# so a mixed-build cluster fails at connect time with a version mismatch.
+#
+# To move the pin: bump it here, then rebuild every node via
+# scripts/bootstrap-node.sh before bringing the cluster back up.
+
+LLAMACPP_REPO=https://github.com/ggml-org/llama.cpp
+LLAMACPP_REF=4c9233c034fc450dcf34c7c0988aebe6da5cdf1a
+LLAMACPP_DATE=2026-09-15
+GGML_VERSION=0.24.0

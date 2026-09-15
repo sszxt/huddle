@@ -1,0 +1,35 @@
+# Huddle node: agent + public OpenAI-compatible API.
+#
+# Install:
+#   sudo cp packaging/systemd/huddle.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now huddle
+#
+# Edit User, WorkingDirectory and ExecStart for the target box. Works the same
+# on Ubuntu and Arch.
+
+[Unit]
+Description=Huddle node (agent + OpenAI-compatible API)
+Documentation=https://github.com/sszxt/huddle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=edgeup
+WorkingDirectory=/home/edgeup/huddle
+ExecStart=/home/edgeup/.local/bin/uv run huddle serve
+Restart=on-failure
+RestartSec=5
+
+# A large GGUF takes real time to load, and a head node also streams weights to
+# every peer before it is ready. Do not let systemd kill a healthy slow start.
+TimeoutStartSec=900
+
+# Reach the whole tree: llama-server is a child, and killing only the parent
+# leaves it holding the port.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
