@@ -133,3 +133,60 @@ def show_model(
     typer.echo(f"  per layer       {info.mean_layer_bytes / mib:,.1f} MiB")
     typer.echo(f"  non-layer       {info.overhead_bytes / mib:,.1f} MiB")
     typer.echo(f"  kv cache @{ctx}  {info.kv_cache_bytes(ctx) / mib:,.1f} MiB")
+
+
+@app.command()
+def plan(
+    config: ConfigOption = DEFAULT_CONFIG,
+    model: Annotated[
+        str | None, typer.Option(help="Model file name; defaults to configured")
+    ] = None,
+    ctx: Annotated[int | None, typer.Option(help="Context length; defaults to configured")] = None,
+) -> None:
+    """Show how layers would be split across this cluster."""
+    import asyncio
+
+    from huddle.coordinator.cluster import build_device_list, query_peers
+    from huddle.coordinator.planner import plan_placement
+    from huddle.gguf import GGUFError, read_gguf
+    from huddle.hardware import probe
+
+    settings = _load(config)
+    n_ctx = ctx or settings.backend.ctx_size
+
+    try:
+        info = read_gguf(settings.models.resolve(model))
+    except (GGUFError, OSError, ValueError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    local = probe(settings.node.name, settings.binaries.llama_server)
+    reports = asyncio.run(query_peers(settings))
+
+    for report in reports:
+        if not report.reachable:
+            typer.secho(
+                f"peer {report.peer.name} unreachable: {report.error}", fg=typer.colors.YELLOW
+            )
+
+    devices, endpoints = build_device_list(local, reports)
+    if not devices:
+        typer.secho("no devices found", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    result = plan_placement(info, devices, n_ctx=n_ctx)
+
+    typer.echo(f"{info.name or info.path.name}  [{info.architecture}, {info.quantization}]")
+    typer.echo(f"  {info.n_layers} layers, {result.per_layer_mib:,.1f} MiB each at ctx {n_ctx:,}")
+    typer.echo("")
+    for line in result.summary():
+        typer.echo("  " + line)
+    typer.echo("")
+    for warning in result.warnings:
+        typer.secho(f"  ! {warning}", fg=typer.colors.YELLOW)
+    typer.echo("  flags:")
+    typer.echo(f"    -ngl {result.n_gpu_layers}")
+    if result.tensor_split:
+        typer.echo(f"    --tensor-split {','.join(f'{v:g}' for v in result.tensor_split)}")
+    if endpoints:
+        typer.echo(f"    --rpc {','.join(endpoints)}")

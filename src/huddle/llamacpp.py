@@ -188,3 +188,43 @@ def binary_version(binary: Path, *, timeout: float = 30.0) -> str:
         if "version" in line.lower():
             return line.strip()
     return text.strip().splitlines()[0] if text.strip() else "unknown"
+
+
+# `-lv 5` emits one of these per layer, e.g.
+#   0.00.487.190 D load_tensors: layer   1 assigned to device RPC0, is_swa = 0
+# Nothing is printed at default verbosity, so raising it is mandatory for any
+# check on where layers actually went.
+_LAYER_ASSIGNMENT = re.compile(r"layer\s+(?P<layer>\d+) assigned to device (?P<device>[^\s,]+)")
+
+
+def parse_layer_assignments(output: str) -> dict[str, list[int]]:
+    """Read actual layer placement out of a verbose ``llama-server`` log.
+
+    This is how we verify a plan was honoured rather than assumed: a wrong
+    ``--tensor-split`` order does not error, it just quietly runs everything on
+    the wrong device.
+
+    The log holds two passes — a memory-fitting dry run and the real load — and
+    only the last is what happened. Passes are separated by the layer index
+    restarting.
+    """
+    hits = [
+        (int(match.group("layer")), match.group("device"))
+        for line in output.splitlines()
+        if (match := _LAYER_ASSIGNMENT.search(line))
+    ]
+    if not hits:
+        return {}
+
+    final: list[tuple[int, str]] = []
+    previous = -1
+    for layer, device in hits:
+        if layer <= previous:
+            final = []
+        final.append((layer, device))
+        previous = layer
+
+    placement: dict[str, list[int]] = {}
+    for layer, device in final:
+        placement.setdefault(device, []).append(layer)
+    return placement

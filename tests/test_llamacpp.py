@@ -16,6 +16,7 @@ from huddle.llamacpp import (
     build_llama_server_argv,
     build_rpc_server_argv,
     parse_devices,
+    parse_layer_assignments,
     require_binary,
 )
 
@@ -135,3 +136,21 @@ def test_parse_devices_against_real_output() -> None:
     # The iGPU advertises 48 GiB because it carves out system RAM. Placement
     # must not read this as dedicated VRAM.
     assert devices[1].total_mib == 48045
+
+
+def test_parse_layer_assignments_uses_the_final_pass() -> None:
+    """The log holds a fitting dry run and the real load; only the last counts.
+
+    Format captured from a real two-node run on omarchy with `-lv 5`.
+    """
+    golden = Path(__file__).parent / "golden" / "layer_assignment_omarchy.txt"
+    placement = parse_layer_assignments(golden.read_text())
+
+    assert placement == {"CPU": [0], "RPC0": [1, 2, 3], "Vulkan0": [4, 5]}
+    # The dry run put layer 3 on Vulkan0; the real load put it on RPC0.
+    assert 3 in placement["RPC0"]
+
+
+def test_parse_layer_assignments_empty_without_verbosity() -> None:
+    """At default verbosity llama.cpp prints nothing about placement."""
+    assert parse_layer_assignments("model loaded\nlistening on http://...\n") == {}
