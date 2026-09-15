@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from huddle.agent.service import BackendService, BackendStatus
+from huddle.agent.service import BackendService, BackendStatus, RpcStatus
 from huddle.config import HuddleConfig
 from huddle.hardware import NodeHardware
 from huddle.process import ProcessError
@@ -53,6 +53,25 @@ def build_router(service: BackendService) -> APIRouter:
     @router.get("/backend/logs")
     async def backend_logs() -> LogsResponse:
         return LogsResponse(lines=service.logs())
+
+    @router.get("/rpc")
+    async def rpc_status() -> RpcStatus:
+        return service.rpc_status()
+
+    @router.post("/rpc/start")
+    async def rpc_start() -> RpcStatus:
+        try:
+            return await service.start_rpc()
+        except (ProcessError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/rpc/stop")
+    async def rpc_stop() -> RpcStatus:
+        return await service.stop_rpc()
+
+    @router.get("/rpc/logs")
+    async def rpc_logs() -> LogsResponse:
+        return LogsResponse(lines=service.rpc_logs())
 
     return router
 

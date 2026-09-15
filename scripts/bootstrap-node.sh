@@ -7,6 +7,12 @@
 # Usage:
 #   scripts/bootstrap-node.sh              # Vulkan build (default)
 #   HUDDLE_BACKEND=cpu scripts/bootstrap-node.sh
+#   HUDDLE_SKIP_DEPS=1 scripts/bootstrap-node.sh   # deps already installed
+#
+# HUDDLE_SKIP_DEPS exists because the dependency step is the only part needing
+# sudo, and sudo cannot prompt over a detached SSH session. On a node where an
+# admin has already installed the packages, skipping it makes the rest run
+# unattended.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,7 +26,23 @@ JOBS="${HUDDLE_JOBS:-$(nproc)}"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+have_deps() {
+    command -v cmake >/dev/null && command -v ninja >/dev/null || return 1
+    [ "$BACKEND" != vulkan ] && return 0
+    [ -e /usr/include/vulkan/vulkan.h ] && [ -e /usr/include/spirv/unified1/spirv.hpp ]
+}
+
 install_deps() {
+    if [ -n "${HUDDLE_SKIP_DEPS:-}" ]; then
+        log "skipping dependency install (HUDDLE_SKIP_DEPS set)"
+        have_deps || die "dependencies are missing; unset HUDDLE_SKIP_DEPS or install them"
+        return
+    fi
+    if have_deps; then
+        log "dependencies already present, skipping install"
+        return
+    fi
+
     local common_arch=(cmake ninja ccache git)
     local common_deb=(cmake ninja-build ccache git build-essential)
 

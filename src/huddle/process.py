@@ -149,3 +149,21 @@ class ManagedProcess:
         with contextlib.suppress(asyncio.CancelledError):
             await self._drain_task
         self._drain_task = None
+
+
+async def tcp_is_open(host: str, port: int, *, timeout: float = 2.0) -> bool:
+    """Whether something accepts TCP connections at ``host:port``.
+
+    Readiness for ``ggml-rpc-server``, which speaks its own binary protocol
+    rather than HTTP, so there is no health endpoint to poll.
+    """
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
+    except (OSError, TimeoutError):
+        return False
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+    return True

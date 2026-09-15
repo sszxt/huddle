@@ -96,6 +96,10 @@ class RpcConfig(Model):
     cache: bool = True
     devices: list[str] = Field(default_factory=list)
     threads: int | None = None
+    # What peers should dial to reach this node. Bind is 0.0.0.0, which is not
+    # an address anyone can connect to, so report something routable instead —
+    # on this cluster, the node's Tailscale address.
+    advertise: str | None = None
 
 
 class PeerConfig(Model):

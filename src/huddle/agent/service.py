@@ -1,8 +1,8 @@
 """Ownership of this node's llama.cpp processes.
 
-v0 manages the head ``llama-server`` only. The worker ``ggml-rpc-server`` joins
-in v1, which is why lifecycle and status are shaped generically here rather than
-around a single process.
+Two roles, either or both of which a node may play: the head ``llama-server``
+that serves requests, and the worker ``ggml-rpc-server`` that holds layers for
+some other node's head process.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from huddle.config import HuddleConfig
 from huddle.hardware import NodeHardware, probe
-from huddle.llamacpp import build_llama_server_argv, require_binary
-from huddle.process import ManagedProcess, ProcessError, ReadyCheck
+from huddle.llamacpp import build_llama_server_argv, build_rpc_server_argv, require_binary
+from huddle.process import ManagedProcess, ProcessError, ReadyCheck, tcp_is_open
 
 
 class BackendStatus(BaseModel):
@@ -29,14 +29,29 @@ class BackendStatus(BaseModel):
     returncode: int | None = None
 
 
+class RpcStatus(BaseModel):
+    """What this node's worker ``ggml-rpc-server`` is doing."""
+
+    running: bool
+    endpoint: str | None = None
+    bind: str
+    port: int
+    cache: bool
+    pid: int | None = None
+    argv: list[str] = []
+    returncode: int | None = None
+
+
 class BackendService:
-    """Starts, stops and reports on this node's ``llama-server``."""
+    """Starts, stops and reports on this node's llama.cpp processes."""
 
     def __init__(self, config: HuddleConfig) -> None:
         self.config = config
         self._process: ManagedProcess | None = None
         self._model: str | None = None
         self._lock = asyncio.Lock()
+        self._rpc: ManagedProcess | None = None
+        self._rpc_lock = asyncio.Lock()
 
     @property
     def base_url(self) -> str:
@@ -108,5 +123,68 @@ class BackendService:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 response = await client.get(url)
                 return response.status_code == 200
+
+        return ready
+
+    # -- worker role: ggml-rpc-server ------------------------------------
+
+    @property
+    def rpc_running(self) -> bool:
+        return self._rpc is not None and self._rpc.running
+
+    def rpc_status(self) -> RpcStatus:
+        rpc = self.config.rpc
+        endpoint = f"{rpc.advertise}:{rpc.port}" if rpc.advertise else None
+        return RpcStatus(
+            running=self.rpc_running,
+            endpoint=endpoint if self.rpc_running else None,
+            bind=rpc.bind,
+            port=rpc.port,
+            cache=rpc.cache,
+            pid=self._rpc.pid if self._rpc else None,
+            argv=self._rpc.argv if self._rpc else [],
+            returncode=self._rpc.returncode if self._rpc else None,
+        )
+
+    def rpc_logs(self) -> list[str]:
+        return self._rpc.logs() if self._rpc else []
+
+    async def start_rpc(self, *, timeout: float = 60.0) -> RpcStatus:
+        """Launch this node's worker so a remote head can place layers here."""
+        async with self._rpc_lock:
+            if self.rpc_running:
+                raise ProcessError("rpc-server is already running; stop it first")
+
+            binary = self.config.binaries.rpc_server
+            if binary is None:
+                raise ProcessError("no rpc_server binary configured for this node")
+            # Upstream builds it as ggml-rpc-server; the config names the path.
+            require_binary(binary, role="rpc-server")
+
+            argv = build_rpc_server_argv(binary, self.config.rpc)
+            process = ManagedProcess("rpc-server", argv)
+            await process.start(ready=self._rpc_probe(), timeout=timeout)
+
+            self._rpc = process
+            return self.rpc_status()
+
+    async def stop_rpc(self, *, timeout: float = 30.0) -> RpcStatus:
+        async with self._rpc_lock:
+            if self._rpc is not None:
+                await self._rpc.stop(timeout=timeout)
+            status = self.rpc_status()
+            self._rpc = None
+            return status
+
+    def _rpc_probe(self) -> ReadyCheck:
+        """Readiness is a successful TCP connect: there is no health endpoint.
+
+        Probes 127.0.0.1 rather than the bind address, because 0.0.0.0 is not
+        a connectable destination.
+        """
+        port = self.config.rpc.port
+
+        async def ready() -> bool:
+            return await tcp_is_open("127.0.0.1", port, timeout=1.0)
 
         return ready

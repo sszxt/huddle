@@ -44,14 +44,20 @@ def models_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def huddle_config(fake_llama_server: Path, models_dir: Path, free_port: int) -> HuddleConfig:
+def huddle_config(
+    fake_llama_server: Path, fake_rpc_server: Path, models_dir: Path, free_port: int
+) -> HuddleConfig:
     return HuddleConfig.model_validate(
         {
             "node": {"name": "testnode"},
-            "binaries": {"llama_server": str(fake_llama_server)},
+            "binaries": {
+                "llama_server": str(fake_llama_server),
+                "rpc_server": str(fake_rpc_server),
+            },
             "models": {"dir": str(models_dir), "default": "tiny.gguf"},
             "backend": {"host": "127.0.0.1", "port": free_port, "autostart": True},
             "api": {"host": "127.0.0.1", "port": 8000},
+            "rpc": {"port": free_port + 1},
         }
     )
 

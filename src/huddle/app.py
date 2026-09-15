@@ -38,6 +38,7 @@ def create_app(config: HuddleConfig) -> FastAPI:
             yield
         finally:
             await service.stop()
+            await service.stop_rpc()
             await client.aclose()
 
     app = FastAPI(title="Huddle", version="0.1.0", lifespan=lifespan)
