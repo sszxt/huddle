@@ -102,6 +102,20 @@ class RpcConfig(Model):
     advertise: str | None = None
 
 
+class PlannerConfig(Model):
+    """How conservatively to fill devices.
+
+    ``headroom`` is the fraction of a device's free memory left for compute
+    buffers and fragmentation. Overshooting is not a slow cluster, it is an
+    out-of-memory failure at load, so the default is deliberately generous.
+    """
+
+    headroom: float = Field(default=0.15, ge=0.0, lt=1.0)
+    # Integrated GPUs advertise system RAM as if it were VRAM. Enabling this
+    # takes them at their word, which is rarely what you want.
+    use_unified_memory: bool = False
+
+
 class PeerConfig(Model):
     """A remote node participating in the cluster."""
 
@@ -133,6 +147,7 @@ class HuddleConfig(Model):
     backend: BackendConfig = Field(default_factory=BackendConfig)
     rpc: RpcConfig = Field(default_factory=RpcConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    planner: PlannerConfig = Field(default_factory=PlannerConfig)
     peers: list[PeerConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")

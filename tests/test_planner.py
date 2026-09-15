@@ -124,11 +124,22 @@ def test_kv_cache_reduces_capacity_at_longer_context() -> None:
     assert long.n_gpu_layers < short.n_gpu_layers, "KV cache must count against capacity"
 
 
-def test_overhead_charged_to_first_device() -> None:
+def test_overhead_charged_to_first_filled_device() -> None:
+    """Embeddings land with the device we fill first, not the one enumerated first."""
     devices = [gpu("Vulkan0", "head", 6000), gpu("Vulkan1", "head", 6000)]
     model = make_model(n_layers=40, layer_mib=200, overhead_mib=3000)
     plan = plan_placement(model, devices, n_ctx=1)
     assert plan.layers_per_device[0] < plan.layers_per_device[1]
+
+
+def test_overhead_follows_fill_order_not_enumeration() -> None:
+    """With a peer enumerated first, the overhead still belongs to the local device."""
+    devices = [gpu("RPC0", "peer", 6000, is_rpc=True), gpu("Vulkan0", "head", 6000)]
+    model = make_model(n_layers=60, layer_mib=200, overhead_mib=3000)
+    plan = plan_placement(model, devices, n_ctx=1)
+    # Vulkan0 is filled first and carries the overhead, so it holds fewer layers
+    # than the peer despite identical free memory.
+    assert 0 < plan.layers_per_device[1] < plan.layers_per_device[0]
 
 
 def test_rejects_model_with_no_layers() -> None:

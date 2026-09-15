@@ -78,11 +78,21 @@ class BackendService:
     def hardware(self) -> NodeHardware:
         return probe(self.config.node.name, self.config.binaries.llama_server)
 
-    async def start(self, model: str | None = None, *, timeout: float = 300.0) -> BackendStatus:
+    async def start(
+        self,
+        model: str | None = None,
+        *,
+        rpc_endpoints: list[str] | None = None,
+        tensor_split: list[float] | None = None,
+        n_gpu_layers: int | str | None = None,
+        timeout: float = 900.0,
+    ) -> BackendStatus:
         """Launch ``llama-server`` and wait until it reports healthy.
 
-        The timeout is generous: a large GGUF takes real time to load, and in a
-        cluster the head node also streams weights to every peer first.
+        The timeout is generous because a clustered start is slow for a real
+        reason: the head streams every remote layer's weights across the network
+        before it will answer, which on 1 GbE is minutes for a large model. The
+        peers' tensor caches make that a one-off.
         """
         async with self._lock:
             if self.running:
@@ -93,10 +103,16 @@ class BackendService:
             if not model_path.exists():
                 raise ProcessError(f"model not found: {model_path}")
 
+            backend = self.config.backend
+            if n_gpu_layers is not None:
+                backend = backend.model_copy(update={"n_gpu_layers": n_gpu_layers})
+
             argv = build_llama_server_argv(
                 binary,
-                self.config.backend,
+                backend,
                 model_path,
+                rpc_endpoints=rpc_endpoints,
+                tensor_split=tensor_split,
                 alias=model_path.stem,
             )
             process = ManagedProcess("llama-server", argv)

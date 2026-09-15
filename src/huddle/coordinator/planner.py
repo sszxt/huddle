@@ -123,6 +123,14 @@ def plan_placement(
     warnings: list[str] = []
     capacities: list[int] = []
 
+    # Embeddings and the output head belong to no layer and have to live
+    # somewhere. Charge them to the first device we intend to *fill*, not the
+    # first enumerated one — with local-first filling those differ, and on a
+    # large-vocabulary model the overhead is big enough that guessing wrong
+    # over-commits a real device.
+    fill_order = _fill_order(devices)
+    overhead_index = fill_order[0] if fill_order else -1
+
     for index, device in enumerate(devices):
         if device.unified_memory and not use_unified_memory:
             # Its advertised memory is system RAM, and its bandwidth is shared
@@ -133,9 +141,7 @@ def plan_placement(
             continue
 
         budget_mib = device.free_mib * (1.0 - headroom)
-        if reserve_overhead_on_first and index == 0:
-            # Embeddings and the output head are not part of any layer and have
-            # to live somewhere; they land with the first device.
+        if reserve_overhead_on_first and index == overhead_index:
             budget_mib -= model.overhead_bytes / MIB
 
         fits = int(budget_mib // per_layer_mib)
@@ -171,7 +177,7 @@ def plan_placement(
     # peer just because that peer is enumerated first.
     layers_per_device = [0] * len(devices)
     remaining = n_gpu_layers
-    for index in _fill_order(devices):
+    for index in fill_order:
         take = min(capacities[index], remaining)
         layers_per_device[index] = take
         remaining -= take

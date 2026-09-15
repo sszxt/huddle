@@ -40,6 +40,12 @@ rpc:
   devices: []            # empty = let llama.cpp choose
   threads: null
 
+# How conservatively to fill devices.
+planner:
+  headroom: 0.15            # fraction left for compute buffers; overshooting
+                            # means an out-of-memory failure at load time
+  use_unified_memory: false # iGPUs advertise system RAM as VRAM; don't believe them
+
 # The public OpenAI-compatible API.
 api:
   host: 127.0.0.1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
+from tests.fakes.gguf_builder import write_gguf
 
 FAKES_DIR = Path(__file__).parent / "fakes"
 
@@ -33,13 +35,14 @@ def free_port() -> int:
 
 @pytest.fixture
 def models_dir(tmp_path: Path) -> Path:
-    """A model directory holding one fake GGUF.
+    """A model directory holding one synthetic but *valid* GGUF.
 
-    The fake llama-server never reads it; only existence is checked.
+    It must be real: the fake llama-server never reads it, but the planner parses
+    its header to work out layer count and per-layer cost.
     """
     directory = tmp_path / "models"
     directory.mkdir()
-    (directory / "tiny.gguf").write_bytes(b"GGUF\x00fake")
+    write_gguf(directory / "tiny.gguf", n_layers=12, n_embd=256)
     return directory
 
 
@@ -70,3 +73,66 @@ async def client(huddle_config: HuddleConfig) -> AsyncIterator[httpx.AsyncClient
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://huddle.test") as http:
             yield http
+
+
+@pytest.fixture
+def free_ports() -> list[int]:
+    """Several distinct free ports, held open together to avoid collisions."""
+    socks = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(4)]
+    try:
+        ports = []
+        for sock in socks:
+            sock.bind(("127.0.0.1", 0))
+            ports.append(int(sock.getsockname()[1]))
+        return ports
+    finally:
+        for sock in socks:
+            sock.close()
+
+
+@pytest.fixture
+async def peer_agent(
+    fake_llama_server: Path, fake_rpc_server: Path, tmp_path: Path, free_ports: list[int]
+) -> AsyncIterator[dict[str, int]]:
+    """A second Huddle agent on localhost, standing in for a cluster peer.
+
+    A real HTTP server rather than a mock: the coordinator's job is talking to
+    peers over HTTP, so that is the part worth exercising.
+    """
+    import uvicorn
+
+    from huddle.agent.app import create_app as create_agent_app
+
+    agent_port, rpc_port = free_ports[0], free_ports[1]
+    models = tmp_path / "peer-models"
+    models.mkdir(exist_ok=True)
+
+    config = HuddleConfig.model_validate(
+        {
+            "node": {"name": "peer1", "agent_port": agent_port},
+            "binaries": {
+                "llama_server": str(fake_llama_server),
+                "rpc_server": str(fake_rpc_server),
+            },
+            "models": {"dir": str(models)},
+            "backend": {"autostart": False},
+            "rpc": {"port": rpc_port, "advertise": "127.0.0.1"},
+        }
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_agent_app(config), host="127.0.0.1", port=agent_port, log_level="error"
+        )
+    )
+    task = asyncio.create_task(server.serve())
+
+    deadline = asyncio.get_running_loop().time() + 15
+    while not server.started:
+        if asyncio.get_running_loop().time() > deadline:
+            raise RuntimeError("peer agent did not start")
+        await asyncio.sleep(0.05)
+
+    yield {"agent_port": agent_port, "rpc_port": rpc_port}
+
+    server.should_exit = True
+    await task

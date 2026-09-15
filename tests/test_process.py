@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -95,3 +96,26 @@ async def test_fake_records_argv(fake_llama_server: Path, free_port: int, tmp_pa
     recorded = json.loads(argv_file.read_text())
     assert "-ngl" in recorded
     assert recorded[recorded.index("-ngl") + 1] == "all"
+
+
+async def test_startup_logs_survive_a_flood_of_later_output(tmp_path: Path) -> None:
+    """Verbose llama.cpp output must not evict the lines that explain the start.
+
+    Device registration and layer placement are printed in the first few hundred
+    lines; under `-lv 5` a single rolling buffer loses all of it within seconds.
+    """
+    script = tmp_path / "chatty.py"
+    script.write_text(
+        "for i in range(3000):\n"
+        "    print('STARTUP marker' if i < 5 else f'noise {i}', flush=True)\n"
+    )
+    process = ManagedProcess("chatty", [sys.executable, str(script)], log_capacity=50)
+    await process.start()
+    await asyncio.sleep(1.0)
+    await process.stop()
+
+    combined = process.logs()
+    assert any("STARTUP marker" in line for line in combined), "startup lines were evicted"
+    assert any("omitted" in line for line in combined), "a gap must be visible, not silent"
+    assert any("noise 299" in line for line in combined), "recent lines kept too"
+    assert process.startup_logs()[0] == "STARTUP marker"

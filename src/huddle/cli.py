@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -76,6 +77,7 @@ def serve(
     from huddle.app import create_app
 
     settings = _load(config)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
     uvicorn.run(
         create_app(settings),
         host=host or settings.api.host,
@@ -174,7 +176,13 @@ def plan(
         typer.secho("no devices found", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-    result = plan_placement(info, devices, n_ctx=n_ctx)
+    result = plan_placement(
+        info,
+        devices,
+        n_ctx=n_ctx,
+        headroom=settings.planner.headroom,
+        use_unified_memory=settings.planner.use_unified_memory,
+    )
 
     typer.echo(f"{info.name or info.path.name}  [{info.architecture}, {info.quantization}]")
     typer.echo(f"  {info.n_layers} layers, {result.per_layer_mib:,.1f} MiB each at ctx {n_ctx:,}")

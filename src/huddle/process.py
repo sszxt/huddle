@@ -36,12 +36,20 @@ class ManagedProcess:
         *,
         env: dict[str, str] | None = None,
         log_capacity: int = 400,
+        startup_capacity: int = 300,
     ) -> None:
         self.name = name
         self.argv = argv
         self.env = env
         self._process: asyncio.subprocess.Process | None = None
-        self._logs: deque[str] = deque(maxlen=log_capacity)
+        # Two buffers, not one. Everything worth knowing about a llama.cpp
+        # start — device registration, layer placement, load errors — is printed
+        # in the first few hundred lines, and under `-lv 5` a single rolling
+        # buffer evicts all of it within seconds of serving traffic.
+        self._startup: list[str] = []
+        self._startup_capacity = startup_capacity
+        self._recent: deque[str] = deque(maxlen=log_capacity)
+        self._seen = 0
         self._drain_task: asyncio.Task[None] | None = None
 
     @property
@@ -56,9 +64,21 @@ class ManagedProcess:
     def returncode(self) -> int | None:
         return self._process.returncode if self._process else None
 
+    def startup_logs(self) -> list[str]:
+        """The process's first lines, which never get evicted."""
+        return list(self._startup)
+
     def logs(self) -> list[str]:
-        """Recent output lines, oldest first."""
-        return list(self._logs)
+        """Startup output followed by recent output, oldest first.
+
+        A marker is inserted where lines were dropped, so a gap is visible
+        rather than being mistaken for contiguous output.
+        """
+        if not self._recent:
+            return list(self._startup)
+        omitted = self._seen - len(self._startup) - len(self._recent)
+        gap = [f"... {omitted} lines omitted ..."] if omitted > 0 else []
+        return [*self._startup, *gap, *self._recent]
 
     async def start(self, *, ready: ReadyCheck | None = None, timeout: float = 120.0) -> None:
         """Launch the process and wait until it reports ready.
@@ -95,9 +115,9 @@ class ManagedProcess:
         deadline = loop.time() + timeout
         while loop.time() < deadline:
             if not self.running:
-                tail = "\n".join(self.logs()[-20:])
                 raise ProcessError(
-                    f"{self.name} exited with code {self.returncode} during startup\n{tail}"
+                    f"{self.name} exited with code {self.returncode} during startup\n"
+                    + "\n".join(self.logs()[-20:])
                 )
             with contextlib.suppress(Exception):
                 if await ready():
@@ -140,7 +160,15 @@ class ManagedProcess:
             line = await stream.readline()
             if not line:
                 break
-            self._logs.append(line.decode(errors="replace").rstrip("\n"))
+            self._record(line.decode(errors="replace").rstrip("\n"))
+
+    def _record(self, line: str) -> None:
+        """Keep the first lines forever, then roll the rest."""
+        self._seen += 1
+        if len(self._startup) < self._startup_capacity:
+            self._startup.append(line)
+        else:
+            self._recent.append(line)
 
     async def _cancel_drain(self) -> None:
         if self._drain_task is None:
