@@ -1,0 +1,3 @@
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 5070 (12473 MiB, 11447 MiB free)
+  Vulkan1: Intel(R) Graphics (RPL-S) (48045 MiB, 43241 MiB free)
