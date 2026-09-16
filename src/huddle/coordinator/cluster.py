@@ -18,6 +18,7 @@ from huddle.config import HuddleConfig, PeerConfig
 from huddle.coordinator.planner import PlacementDevice
 from huddle.discovery import DiscoveredPeer, discover
 from huddle.hardware import NodeHardware
+from huddle.llamacpp import same_build
 
 log = logging.getLogger("huddle.cluster")
 
@@ -94,9 +95,7 @@ def _version_mismatch(
     """
     if not config.discovery.require_matching_version:
         return False
-    if not local_version or not candidate.llamacpp_version:
-        return False
-    if candidate.llamacpp_version == local_version:
+    if same_build(local_version, candidate.llamacpp_version):
         return False
     log.warning(
         "discovery: skipping %s, llama.cpp version differs (%s here, %s there)",

@@ -228,3 +228,31 @@ def parse_layer_assignments(output: str) -> dict[str, list[int]]:
     for layer, device in final:
         placement.setdefault(device, []).append(layer)
     return placement
+
+
+# llama.cpp reports e.g. "version: 0.4.1-dev (build 10975, commit 4c9233c03)".
+# The build number counts commits since the root, so it depends on clone depth:
+# a --depth=1 clone of the *same* commit reports "build 1". Only the commit
+# identifies the build for compatibility purposes.
+_COMMIT = re.compile(r"commit\s+([0-9a-f]{7,40})")
+
+
+def version_commit(version: str | None) -> str | None:
+    """Extract the llama.cpp commit from a version string."""
+    if not version:
+        return None
+    match = _COMMIT.search(version)
+    return match.group(1) if match else None
+
+
+def same_build(left: str | None, right: str | None) -> bool:
+    """Whether two llama.cpp builds can talk to each other over RPC.
+
+    Compares commits, not version strings: the build number varies with clone
+    depth even for identical source, and short hashes are truncated to different
+    lengths, so one may be a prefix of the other.
+    """
+    a, b = version_commit(left), version_commit(right)
+    if a is None or b is None:
+        return True  # unknown on either side: do not block on a guess
+    return a.startswith(b) or b.startswith(a)

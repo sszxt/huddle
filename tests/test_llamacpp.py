@@ -18,6 +18,8 @@ from huddle.llamacpp import (
     parse_devices,
     parse_layer_assignments,
     require_binary,
+    same_build,
+    version_commit,
 )
 
 RPC_BINARY = Path("/opt/llama.cpp/rpc-server")
@@ -154,3 +156,30 @@ def test_parse_layer_assignments_uses_the_final_pass() -> None:
 def test_parse_layer_assignments_empty_without_verbosity() -> None:
     """At default verbosity llama.cpp prints nothing about placement."""
     assert parse_layer_assignments("model loaded\nlistening on http://...\n") == {}
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "compatible"),
+    [
+        # The real case: same commit, different build numbers because one node
+        # was built from a shallow clone. These must be treated as compatible.
+        ("version: 0.4.1-dev (build 1, commit 4c9233c)",
+         "version: 0.4.1-dev (build 10975, commit 4c9233c03)", True),
+        ("version: 0.4.1-dev (build 10975, commit 4c9233c03)",
+         "version: 0.4.1-dev (build 10975, commit 4c9233c03)", True),
+        ("version: 0.4.1-dev (build 10975, commit 4c9233c03)",
+         "version: 0.4.1-dev (build 10975, commit deadbee)", False),
+        ("no commit here", "version: 0.4.1 (build 1, commit abc1234)", True),
+        (None, "version: 0.4.1 (build 1, commit abc1234)", True),
+    ],
+)  # fmt: skip
+def test_build_compatibility_compares_commits_not_version_strings(
+    left: str | None, right: str | None, compatible: bool
+) -> None:
+    assert same_build(left, right) is compatible
+
+
+def test_version_commit_extraction() -> None:
+    assert version_commit("version: 0.4.1-dev (build 10975, commit 4c9233c03)") == "4c9233c03"
+    assert version_commit("nothing useful") is None
+    assert version_commit(None) is None

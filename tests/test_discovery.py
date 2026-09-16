@@ -15,6 +15,11 @@ from huddle.config import DiscoveryConfig, HuddleConfig
 from huddle.coordinator.cluster import resolve_peers
 from huddle.discovery import DiscoveredPeer
 
+SAME_COMMIT = "version: 0.4.1-dev (build 10975, commit 4c9233c03)"
+# Same commit, lower build number: what a --depth=1 clone reports.
+SHALLOW_SAME_COMMIT = "version: 0.4.1-dev (build 1, commit 4c9233c)"
+OTHER_COMMIT = "version: 0.4.1-dev (build 10975, commit deadbeef)"
+
 
 def peer(name: str, host: str, **kw: object) -> DiscoveredPeer:
     return DiscoveredPeer(name=name, host=host, agent_port=8081, rpc_port=50052, **kw)  # type: ignore[arg-type]
@@ -85,12 +90,12 @@ async def test_version_mismatched_peer_is_skipped(
         fake_discover(
             [
                 peer("same", "100.64.0.2", llamacpp_version="build 10975"),
-                peer("other", "100.64.0.3", llamacpp_version="build 9000"),
+                peer("other", "100.64.0.3", llamacpp_version=OTHER_COMMIT),
             ]
         ),
     )
     huddle_config.discovery.enabled = True
-    resolved = await resolve_peers(huddle_config, "build 10975")
+    resolved = await resolve_peers(huddle_config, SAME_COMMIT)
     assert [p.name for p in resolved] == ["same"]
 
 
@@ -99,11 +104,11 @@ async def test_version_check_can_be_disabled(
 ) -> None:
     monkeypatch.setattr(
         "huddle.coordinator.cluster.discover",
-        fake_discover([peer("other", "100.64.0.3", llamacpp_version="build 9000")]),
+        fake_discover([peer("other", "100.64.0.3", llamacpp_version=OTHER_COMMIT)]),
     )
     huddle_config.discovery.enabled = True
     huddle_config.discovery.require_matching_version = False
-    assert [p.name for p in await resolve_peers(huddle_config, "build 10975")] == ["other"]
+    assert [p.name for p in await resolve_peers(huddle_config, SAME_COMMIT)] == ["other"]
 
 
 async def test_discovery_failure_falls_back_to_configured_peers(
@@ -158,3 +163,21 @@ async def test_self_is_excluded_from_discovery(huddle_config: HuddleConfig) -> N
         await advertiser.stop()
 
     assert not any(p.name == "myself" for p in found)
+
+
+async def test_shallow_clone_build_number_is_not_a_mismatch(
+    huddle_config: HuddleConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same commit, different build number, because one node used --depth=1.
+
+    This broke a working cluster: the build number counts commits since the root,
+    so clone depth changes it even when the source is identical. Compatibility
+    depends on the commit, which is what the RPC handshake actually cares about.
+    """
+    monkeypatch.setattr(
+        "huddle.coordinator.cluster.discover",
+        fake_discover([peer("maksood", "100.98.227.49", llamacpp_version=SAME_COMMIT)]),
+    )
+    huddle_config.discovery.enabled = True
+    resolved = await resolve_peers(huddle_config, SHALLOW_SAME_COMMIT)
+    assert [p.name for p in resolved] == ["maksood"], "same commit must be compatible"
