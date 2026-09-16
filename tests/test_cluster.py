@@ -305,3 +305,55 @@ async def test_stop_disables_supervision(
         assert status["running"] is False
         assert status["desired"] is False
         assert status["restarts"] == 0, "stopping is not a failure to recover from"
+
+
+async def test_switch_model_replans_for_the_new_model(
+    huddle_config: HuddleConfig, models_dir: object
+) -> None:
+    """Switching must replan: a different model has different layer sizes."""
+    from tests.fakes.gguf_builder import write_gguf
+
+    # A second model with twice the layers, so the plan must visibly differ.
+    write_gguf(huddle_config.models.dir / "bigger.gguf", n_layers=24, n_embd=256)
+
+    huddle_config.backend.autostart = False
+    app, http = await cluster_client(huddle_config)
+    async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        await http.post("/cluster/start")
+        first = (await http.get("/cluster")).json()
+        assert first["model"] == "tiny.gguf"
+        assert first["plan"]["n_layers"] == 12
+
+        switched = (await http.post("/cluster/model", json={"model": "bigger.gguf"})).json()
+        assert switched["model"] == "bigger.gguf"
+        assert switched["plan"]["n_layers"] == 24, "plan must be recomputed, not reused"
+        assert switched["running"] is True
+
+        await http.post("/cluster/stop")
+
+
+async def test_lists_available_models(huddle_config: HuddleConfig) -> None:
+    from tests.fakes.gguf_builder import write_gguf
+
+    write_gguf(huddle_config.models.dir / "another.gguf", n_layers=4)
+    # Split shards beyond the first must not be offered: loading them fails.
+    (huddle_config.models.dir / "split-00001-of-00003.gguf").write_bytes(b"x")
+    (huddle_config.models.dir / "split-00002-of-00003.gguf").write_bytes(b"x")
+
+    huddle_config.backend.autostart = False
+    app, http = await cluster_client(huddle_config)
+    async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        body = (await http.get("/cluster/models")).json()
+
+    assert "tiny.gguf" in body["available"]
+    assert "another.gguf" in body["available"]
+    assert "split-00001-of-00003.gguf" in body["available"]
+    assert "split-00002-of-00003.gguf" not in body["available"]
+
+
+async def test_switch_rejects_a_missing_model(huddle_config: HuddleConfig) -> None:
+    huddle_config.backend.autostart = False
+    app, http = await cluster_client(huddle_config)
+    async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        response = await http.post("/cluster/model", json={"model": "nope.gguf"})
+        assert response.status_code == 409

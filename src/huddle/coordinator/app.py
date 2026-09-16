@@ -36,6 +36,21 @@ def build_router(service: ClusterService) -> APIRouter:
         except (ProcessError, GGUFError, ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @router.get("/models")
+    async def models() -> dict[str, list[str] | str | None]:
+        """Which models this node could load, and which is loaded now."""
+        return {"available": service.available_models(), "loaded": service.status().model}
+
+    @router.post("/model")
+    async def switch(request: StartRequest) -> ClusterStatus:
+        """Switch to a different model, replanning the split for it."""
+        if not request.model:
+            raise HTTPException(status_code=422, detail="model is required")
+        try:
+            return await service.switch_model(request.model)
+        except (ProcessError, GGUFError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @router.post("/stop")
     async def stop() -> ClusterStatus:
         return await service.stop()

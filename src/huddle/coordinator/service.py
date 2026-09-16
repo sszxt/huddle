@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 
 import httpx
 from pydantic import BaseModel
@@ -24,6 +25,9 @@ from huddle.hardware import probe
 from huddle.process import ProcessError
 
 log = logging.getLogger("huddle.cluster")
+
+# e.g. model-00002-of-00005.gguf
+_SHARD = re.compile(r"-\d{5}-of-\d{5}\.gguf$")
 
 
 class DevicePlacement(BaseModel):
@@ -186,6 +190,33 @@ class ClusterService:
         self._plan = plan
         self._model_name = model
         return self.status()
+
+    async def switch_model(self, model: str) -> ClusterStatus:
+        """Load a different model, replanning the split for it.
+
+        A restart is unavoidable — llama.cpp holds one model per process — but it
+        must not be the caller's problem. Replanning is required rather than
+        cosmetic: a different model has different layer sizes, so reusing the old
+        split would misjudge every device.
+        """
+        async with self._lock:
+            await self._teardown()
+            self._restarts = 0
+            self._last_failure = None
+            status = await self._start_locked(model)
+        self._desired = True
+        self._start_watching()
+        return status
+
+    def available_models(self) -> list[str]:
+        """GGUF files this node can load, newest first."""
+        directory = self.config.models.dir
+        if not directory.is_dir():
+            return []
+        files = sorted(directory.glob("*.gguf"), key=lambda f: f.stat().st_mtime, reverse=True)
+        # A split model is loaded by naming its first shard; listing the others
+        # would offer loads that fail.
+        return [f.name for f in files if _SHARD.search(f.name) is None or "-00001-of-" in f.name]
 
     async def stop(self) -> ClusterStatus:
         """Stop the head first, then the workers it depends on."""
