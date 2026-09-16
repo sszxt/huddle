@@ -52,7 +52,18 @@ api:
   port: 8000
   api_key: null
 
-# Cluster peers. Empty for v0 (single machine).
+# Find peers on the LAN instead of listing them. Discovery uses link-local
+# multicast, but peers are dialled on the address they advertise below — the
+# address multicast sees is a DHCP lease and moves.
+discovery:
+  enabled: false
+  timeout: 3.0
+  advertise: null                 # defaults to rpc.advertise
+  require_matching_version: true  # peers built from another llama.cpp commit
+                                  # are rejected by the RPC handshake anyway,
+                                  # but only later and less clearly
+
+# Cluster peers. Discovered peers are added to these; an explicit entry wins.
 peers: []
 # - name: box2
 #   host: 192.168.0.55

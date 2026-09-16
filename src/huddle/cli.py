@@ -198,3 +198,33 @@ def plan(
         typer.echo(f"    --tensor-split {','.join(f'{v:g}' for v in result.tensor_split)}")
     if endpoints:
         typer.echo(f"    --rpc {','.join(endpoints)}")
+
+
+@app.command()
+def discover(
+    config: ConfigOption = DEFAULT_CONFIG,
+    timeout: Annotated[float, typer.Option(help="Seconds to browse for")] = 5.0,
+) -> None:
+    """Find Huddle nodes on the local network."""
+    import asyncio
+
+    from huddle.discovery import discover as browse
+
+    settings = _load(config)
+    typer.echo(f"browsing for {timeout:g}s ...")
+    peers = asyncio.run(browse(settings.discovery, exclude=settings.node.name, timeout=timeout))
+
+    if not peers:
+        typer.secho("no peers found", fg=typer.colors.YELLOW)
+        typer.echo("  peers advertise only when discovery.enabled is true in their config")
+        return
+
+    for peer in peers:
+        typer.echo(f"  {peer.name}")
+        typer.echo(f"    connect on   {peer.host}  (agent {peer.agent_port}, rpc {peer.rpc_port})")
+        if peer.seen_at and peer.seen_at != peer.host:
+            # These differing is the normal case, not a warning: multicast sees a
+            # DHCP lease, while we dial the stable address it advertised.
+            typer.echo(f"    seen at      {peer.seen_at}  (link-local, not used)")
+        if peer.llamacpp_version:
+            typer.echo(f"    llama.cpp    {peer.llamacpp_version}")

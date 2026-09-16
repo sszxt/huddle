@@ -9,13 +9,17 @@ the order its endpoint was passed to ``--rpc``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
 import httpx
 
 from huddle.config import HuddleConfig, PeerConfig
 from huddle.coordinator.planner import PlacementDevice
+from huddle.discovery import DiscoveredPeer, discover
 from huddle.hardware import NodeHardware
+
+log = logging.getLogger("huddle.cluster")
 
 
 @dataclass
@@ -49,16 +53,78 @@ async def query_peer(
     return PeerReport(peer=peer, hardware=NodeHardware.model_validate(response.json()))
 
 
+async def resolve_peers(config: HuddleConfig, local_version: str | None = None) -> list[PeerConfig]:
+    """The peers to use: those configured, plus any found on the LAN.
+
+    A configured peer always wins over a discovered one of the same name —
+    writing an address down is a decision, and discovery should not quietly
+    override it.
+    """
+    peers = list(config.peers)
+    if not config.discovery.enabled:
+        return peers
+
+    known = {peer.name for peer in peers}
+    try:
+        discovered = await discover(config.discovery, exclude=config.node.name)
+    except Exception as exc:
+        log.warning("discovery failed, using configured peers only: %s", exc)
+        return peers
+
+    for candidate in discovered:
+        if candidate.name in known:
+            log.info(
+                "discovery: %s already configured, keeping the configured entry", candidate.name
+            )
+            continue
+        if _version_mismatch(config, local_version, candidate):
+            continue
+        log.info("discovery: found %s at %s", candidate.name, candidate.host)
+        peers.append(candidate.to_peer())
+    return peers
+
+
+def _version_mismatch(
+    config: HuddleConfig, local_version: str | None, candidate: DiscoveredPeer
+) -> bool:
+    """Whether to skip a peer built from a different llama.cpp.
+
+    The RPC handshake would reject it anyway, but only at connect time and with
+    an error that does not name the real problem.
+    """
+    if not config.discovery.require_matching_version:
+        return False
+    if not local_version or not candidate.llamacpp_version:
+        return False
+    if candidate.llamacpp_version == local_version:
+        return False
+    log.warning(
+        "discovery: skipping %s, llama.cpp version differs (%s here, %s there)",
+        candidate.name,
+        local_version,
+        candidate.llamacpp_version,
+    )
+    return True
+
+
 async def query_peers(config: HuddleConfig, *, timeout: float = 10.0) -> list[PeerReport]:
-    """Ask every peer in parallel, preserving configured order."""
-    if not config.peers:
+    """Ask every peer in parallel, preserving order."""
+    peers = await resolve_peers(config, _local_llamacpp_version(config))
+    if not peers:
         return []
     async with httpx.AsyncClient() as client:
         return list(
-            await asyncio.gather(
-                *(query_peer(client, peer, timeout=timeout) for peer in config.peers)
-            )
+            await asyncio.gather(*(query_peer(client, peer, timeout=timeout) for peer in peers))
         )
+
+
+def _local_llamacpp_version(config: HuddleConfig) -> str | None:
+    from huddle.llamacpp import LlamaCppError, binary_version
+
+    try:
+        return binary_version(config.binaries.llama_server)
+    except LlamaCppError:
+        return None
 
 
 def build_device_list(

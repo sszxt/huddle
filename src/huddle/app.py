@@ -20,6 +20,7 @@ from huddle.api.app import make_client
 from huddle.config import HuddleConfig
 from huddle.coordinator.app import build_router as build_cluster_router
 from huddle.coordinator.service import ClusterService
+from huddle.discovery import Advertiser
 
 log = logging.getLogger("huddle")
 
@@ -28,9 +29,17 @@ def create_app(config: HuddleConfig) -> FastAPI:
     service = BackendService(config)
     cluster = ClusterService(config, service)
     client = make_client()
+    advertiser = Advertiser(config)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if config.discovery.enabled:
+            # Advertise before starting the backend: a peer that comes up while
+            # we are still loading should still find us.
+            advertiser.llamacpp_version = _llamacpp_version(config)
+            with contextlib.suppress(Exception):
+                await advertiser.start()
+
         if config.backend.autostart:
             try:
                 if config.peers:
@@ -51,6 +60,7 @@ def create_app(config: HuddleConfig) -> FastAPI:
         try:
             yield
         finally:
+            await advertiser.stop()
             await cluster.stop()
             await service.stop_rpc()
             await client.aclose()
@@ -62,3 +72,13 @@ def create_app(config: HuddleConfig) -> FastAPI:
     app.include_router(build_cluster_router(cluster))
     app.include_router(build_api_router(service, client, cluster))
     return app
+
+
+def _llamacpp_version(config: HuddleConfig) -> str | None:
+    """Advertised so peers can refuse a version-mismatched cluster early."""
+    from huddle.llamacpp import LlamaCppError, binary_version
+
+    try:
+        return binary_version(config.binaries.llama_server)
+    except LlamaCppError:
+        return None

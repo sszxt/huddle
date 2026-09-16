@@ -6,11 +6,15 @@ Bind it to localhost or a private interface, never to the open network.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from huddle.agent.service import BackendService, BackendStatus, RpcStatus
 from huddle.config import HuddleConfig
+from huddle.discovery import Advertiser
 from huddle.hardware import NodeHardware
 from huddle.process import ProcessError
 
@@ -79,7 +83,31 @@ def build_router(service: BackendService) -> APIRouter:
 def create_app(config: HuddleConfig) -> FastAPI:
     """Standalone agent app, for worker nodes that serve no public API."""
     service = BackendService(config)
-    app = FastAPI(title="Huddle agent", version="0.1.0")
+    advertiser = Advertiser(config)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Worker nodes are precisely the ones a coordinator needs to find.
+        if config.discovery.enabled:
+            with contextlib.suppress(Exception):
+                advertiser.llamacpp_version = _version(config)
+                await advertiser.start()
+        try:
+            yield
+        finally:
+            await advertiser.stop()
+            await service.stop_rpc()
+
+    app = FastAPI(title="Huddle agent", version="0.1.0", lifespan=lifespan)
     app.state.service = service
     app.include_router(build_router(service))
     return app
+
+
+def _version(config: HuddleConfig) -> str | None:
+    from huddle.llamacpp import LlamaCppError, binary_version
+
+    try:
+        return binary_version(config.binaries.llama_server)
+    except LlamaCppError:
+        return None

@@ -116,6 +116,24 @@ class PlannerConfig(Model):
     use_unified_memory: bool = False
 
 
+class DiscoveryConfig(Model):
+    """Finding peers on the LAN instead of listing them.
+
+    Discovered peers are merged with any configured under ``peers``; an explicit
+    entry always wins, because someone who wrote an address down meant it.
+    """
+
+    enabled: bool = False
+    timeout: float = Field(default=3.0, gt=0)
+    # The address peers should dial us on, which is deliberately not the address
+    # multicast sees: that one is a DHCP lease and moves. Defaults to
+    # ``rpc.advertise`` when unset.
+    advertise: str | None = None
+    # Refuse peers built from a different llama.cpp. The RPC handshake rejects
+    # them anyway, but at connect time with an unhelpful message.
+    require_matching_version: bool = True
+
+
 class PeerConfig(Model):
     """A remote node participating in the cluster."""
 
@@ -148,6 +166,7 @@ class HuddleConfig(Model):
     rpc: RpcConfig = Field(default_factory=RpcConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     peers: list[PeerConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
