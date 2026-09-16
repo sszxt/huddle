@@ -33,6 +33,11 @@ class RpcStatus(BaseModel):
     """What this node's worker ``ggml-rpc-server`` is doing."""
 
     running: bool
+    # True when the RPC port is held by a process this agent did not start —
+    # typically a worker that outlived an agent restart. It is still serving a
+    # head node somewhere, so it must be reported rather than silently ignored
+    # or killed.
+    foreign: bool = False
     endpoint: str | None = None
     bind: str
     port: int
@@ -148,6 +153,18 @@ class BackendService:
     def rpc_running(self) -> bool:
         return self._rpc is not None and self._rpc.running
 
+    async def rpc_report(self) -> RpcStatus:
+        """Status reconciled against the port, not just our own bookkeeping.
+
+        An agent restart loses track of a worker it started, because the child
+        outlives it. Reporting `running=False` while something is serving on the
+        port is worse than useless: the coordinator would try to start another.
+        """
+        status = self.rpc_status()
+        if not status.running and await tcp_is_open("127.0.0.1", self.config.rpc.port, timeout=1.0):
+            status.foreign = True
+        return status
+
     def rpc_status(self) -> RpcStatus:
         rpc = self.config.rpc
         endpoint = f"{rpc.advertise}:{rpc.port}" if rpc.advertise else None
@@ -170,6 +187,17 @@ class BackendService:
         async with self._rpc_lock:
             if self.rpc_running:
                 raise ProcessError("rpc-server is already running; stop it first")
+
+            port = self.config.rpc.port
+            if await tcp_is_open("127.0.0.1", port, timeout=1.0):
+                # Something is already serving here that we did not start. It is
+                # very likely a worker that outlived an agent restart and is
+                # still holding layers for a live head, so refuse loudly rather
+                # than fail obscurely on a port bind.
+                raise ProcessError(
+                    f"port {port} is already in use by a worker this agent did not start; "
+                    f"stop it manually before starting a new one"
+                )
 
             binary = self.config.binaries.rpc_server
             if binary is None:

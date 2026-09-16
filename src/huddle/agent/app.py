@@ -56,7 +56,7 @@ def build_router(service: BackendService) -> APIRouter:
 
     @router.get("/rpc")
     async def rpc_status() -> RpcStatus:
-        return service.rpc_status()
+        return await service.rpc_report()
 
     @router.post("/rpc/start")
     async def rpc_start() -> RpcStatus:

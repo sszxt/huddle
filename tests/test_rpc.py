@@ -7,10 +7,13 @@ a firewall problem.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
+from huddle.process import tcp_is_open
 
 
 async def test_rpc_not_running_initially(client: httpx.AsyncClient) -> None:
@@ -71,3 +74,42 @@ async def test_rpc_logs_captured(client: httpx.AsyncClient) -> None:
     lines = (await client.get("/agent/rpc/logs")).json()["lines"]
     assert any("listening on" in line for line in lines)
     await client.post("/agent/rpc/stop")
+
+
+async def test_reports_a_worker_it_did_not_start(
+    huddle_config: HuddleConfig, fake_rpc_server: Path
+) -> None:
+    """A worker outliving an agent restart must be visible, not invisible.
+
+    Reporting `running=False` while something serves on the port is worse than
+    useless — the coordinator would try to start a second one.
+    """
+    import asyncio
+
+    port = huddle_config.rpc.port
+    orphan = await asyncio.create_subprocess_exec(
+        str(fake_rpc_server), "-H", "127.0.0.1", "-p", str(port),
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )  # fmt: skip
+    try:
+        for _ in range(50):  # wait for it to bind
+            if await tcp_is_open("127.0.0.1", port, timeout=0.5):
+                break
+            await asyncio.sleep(0.1)
+
+        huddle_config.backend.autostart = False
+        app = create_app(huddle_config)
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://h.test") as http:
+                status = (await http.get("/agent/rpc")).json()
+                assert status["running"] is False, "we did not start it"
+                assert status["foreign"] is True, "but something is serving on the port"
+
+                # And starting another must refuse clearly, not fail on a bind.
+                response = await http.post("/agent/rpc/start")
+                assert response.status_code == 409
+                assert "already in use" in response.json()["detail"]
+    finally:
+        orphan.kill()
+        await orphan.wait()
