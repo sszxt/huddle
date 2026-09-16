@@ -9,6 +9,7 @@ started have to be torn down again, or the next attempt hits ports already held.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import httpx
@@ -58,17 +59,40 @@ class ClusterStatus(BaseModel):
     head_node: str
     workers: list[str] = []
     plan: ClusterPlan | None = None
+    # `desired` is what we were asked for; `running` is what is true. They differ
+    # exactly when something died, which is the state worth alerting on.
+    desired: bool = False
+    restarts: int = 0
+    last_failure: str | None = None
+
+    @property
+    def degraded(self) -> bool:
+        return self.desired and not self.running
 
 
 class ClusterService:
     """Plans a placement, then starts the processes that realise it."""
 
-    def __init__(self, config: HuddleConfig, backend: BackendService) -> None:
+    def __init__(
+        self,
+        config: HuddleConfig,
+        backend: BackendService,
+        *,
+        watch_interval: float = 5.0,
+        max_restarts: int = 5,
+    ) -> None:
         self.config = config
         self.backend = backend
+        self.watch_interval = watch_interval
+        self.max_restarts = max_restarts
         self._plan: ClusterPlan | None = None
         self._started_workers: list[PeerConfig] = []
         self._lock = asyncio.Lock()
+        self._desired = False
+        self._model_name: str | None = None
+        self._restarts = 0
+        self._last_failure: str | None = None
+        self._watcher: asyncio.Task[None] | None = None
 
     def status(self) -> ClusterStatus:
         return ClusterStatus(
@@ -77,6 +101,9 @@ class ClusterService:
             head_node=self.config.node.name,
             workers=[peer.name for peer in self._started_workers],
             plan=self._plan,
+            desired=self._desired,
+            restarts=self._restarts,
+            last_failure=self._last_failure,
         )
 
     async def build_plan(
@@ -125,40 +152,108 @@ class ClusterService:
     async def start(self, model: str | None = None) -> ClusterStatus:
         """Start workers, then the head, and roll back if the head fails."""
         async with self._lock:
-            if self.backend.running:
-                raise ProcessError("cluster is already running; stop it first")
+            status = await self._start_locked(model)
+        self._desired = True
+        self._start_watching()
+        return status
 
-            plan = await self.build_plan(model)
-            for warning in plan.warnings:
-                log.warning("%s", warning)
+    async def _start_locked(self, model: str | None = None) -> ClusterStatus:
+        """Bring the cluster up. Caller holds the lock."""
+        if self.backend.running:
+            raise ProcessError("cluster is already running; stop it first")
 
-            # Only peers actually carrying layers are worth starting.
-            wanted = _peers_with_layers(self.config.peers, plan)
-            await self._start_workers(wanted)
+        plan = await self.build_plan(model)
+        for warning in plan.warnings:
+            log.warning("%s", warning)
 
-            try:
-                await self.backend.start(
-                    model,
-                    rpc_endpoints=plan.rpc_endpoints or None,
-                    tensor_split=plan.tensor_split or None,
-                    n_gpu_layers=plan.n_gpu_layers,
-                )
-            except Exception:
-                # Leaving workers up would hold their ports and confuse the next
-                # attempt into thinking a stale cluster is healthy.
-                await self._stop_workers()
-                raise
+        # Only peers actually carrying layers are worth starting.
+        wanted = _peers_with_layers(self.config.peers, plan)
+        await self._start_workers(wanted)
 
-            self._plan = plan
-            return self.status()
+        try:
+            await self.backend.start(
+                model,
+                rpc_endpoints=plan.rpc_endpoints or None,
+                tensor_split=plan.tensor_split or None,
+                n_gpu_layers=plan.n_gpu_layers,
+            )
+        except Exception:
+            # Leaving workers up would hold their ports and confuse the next
+            # attempt into thinking a stale cluster is healthy.
+            await self._stop_workers()
+            raise
+
+        self._plan = plan
+        self._model_name = model
+        return self.status()
 
     async def stop(self) -> ClusterStatus:
         """Stop the head first, then the workers it depends on."""
+        self._desired = False
+        await self._stop_watching()
         async with self._lock:
-            await self.backend.stop()
-            await self._stop_workers()
-            self._plan = None
+            await self._teardown()
             return self.status()
+
+    async def _teardown(self) -> None:
+        """Tear the cluster down. Caller holds the lock."""
+        await self.backend.stop()
+        await self._stop_workers()
+        self._plan = None
+
+    # -- supervision ------------------------------------------------------
+
+    def _start_watching(self) -> None:
+        if self._watcher is None or self._watcher.done():
+            self._watcher = asyncio.create_task(self._watch())
+
+    async def _stop_watching(self) -> None:
+        if self._watcher is None:
+            return
+        self._watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._watcher
+        self._watcher = None
+
+    async def _watch(self) -> None:
+        """Restart the cluster when the head dies.
+
+        Losing a worker takes the head down with it — llama.cpp core-dumps
+        rather than failing gracefully — so head death is the single signal
+        worth watching. Recovery has to rebuild the whole thing: the worker that
+        died must come back before the head can reconnect to it.
+        """
+        while True:
+            await asyncio.sleep(self.watch_interval)
+            if not self._desired or self.backend.running or self._lock.locked():
+                continue
+
+            returncode = self.backend.status().returncode
+            if self._restarts >= self.max_restarts:
+                self._last_failure = (
+                    f"head died (rc={returncode}) and the restart limit "
+                    f"({self.max_restarts}) is exhausted; not retrying"
+                )
+                log.error("%s", self._last_failure)
+                self._desired = False
+                return
+
+            self._restarts += 1
+            log.error(
+                "head process died (rc=%s); restart %d/%d",
+                returncode,
+                self._restarts,
+                self.max_restarts,
+            )
+            try:
+                async with self._lock:
+                    await self._teardown()
+                    await self._start_locked(self._model_name)
+                self._last_failure = None
+                log.info("cluster recovered after restart %d", self._restarts)
+            except Exception as exc:
+                self._last_failure = f"restart {self._restarts} failed: {exc}"
+                log.error("%s", self._last_failure)
 
     async def _start_workers(self, peers: list[PeerConfig]) -> None:
         async with httpx.AsyncClient(timeout=60.0) as client:

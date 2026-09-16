@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from huddle.agent.service import BackendService
+from huddle.coordinator.service import ClusterService
 
 # No read timeout: a long generation legitimately holds the connection open for
 # minutes, and in a cluster the first request also waits on weight streaming.
@@ -28,7 +29,11 @@ def make_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=PROXY_TIMEOUT)
 
 
-def build_router(service: BackendService, client: httpx.AsyncClient) -> APIRouter:
+def build_router(
+    service: BackendService,
+    client: httpx.AsyncClient,
+    cluster: ClusterService | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["openai"])
 
     def check_auth(request: Request) -> None:
@@ -50,11 +55,22 @@ def build_router(service: BackendService, client: httpx.AsyncClient) -> APIRoute
     @router.get("/health")
     async def health() -> dict[str, Any]:
         status = service.status()
-        return {
+        body: dict[str, Any] = {
             "status": "ok" if status.running else "backend_down",
             "node": service.config.node.name,
             "model": status.model,
         }
+        if cluster is not None:
+            cluster_status = cluster.status()
+            if cluster_status.degraded:
+                # The backend is meant to be up and is not. Saying "ok" here is
+                # how a dead cluster keeps looking healthy to whatever is
+                # watching it.
+                body["status"] = "degraded"
+                body["detail"] = cluster_status.last_failure or "head process is not running"
+            body["restarts"] = cluster_status.restarts
+            body["workers"] = cluster_status.workers
+        return body
 
     @router.get("/v1/models")
     async def models(request: Request) -> Response:

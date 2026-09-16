@@ -6,6 +6,10 @@ the peer here is a real agent rather than a mock.
 
 from __future__ import annotations
 
+import asyncio
+import os
+import signal
+
 import httpx
 import pytest
 
@@ -221,3 +225,83 @@ async def test_split_positions_survive_dropping_a_peer(
     assert len(plan["tensor_split"]) == len(plan["placement"]), (
         "one split weight per enumerated device, or every later position shifts"
     )
+
+
+async def test_supervisor_restarts_the_head_when_it_dies(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """A dead head must come back, not sit there looking healthy.
+
+    llama.cpp core-dumps when a worker disappears, so this is the failure that
+    actually happens in production rather than a hypothetical one.
+    """
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    cluster = app.state.cluster
+    cluster.watch_interval = 0.2
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        first_pid = (await http.get("/agent/backend")).json()["pid"]
+        assert first_pid is not None
+
+        # Kill the head the way a dying worker would.
+        os.kill(first_pid, signal.SIGKILL)
+
+        for _ in range(100):
+            await asyncio.sleep(0.2)
+            status = (await http.get("/cluster")).json()
+            if status["running"] and status["restarts"] > 0:
+                break
+        else:
+            raise AssertionError("supervisor never restarted the head")
+
+        assert status["restarts"] == 1
+        assert status["last_failure"] is None
+        second_pid = (await http.get("/agent/backend")).json()["pid"]
+        assert second_pid != first_pid, "a new process should be running"
+
+
+async def test_status_reports_degraded_between_death_and_recovery(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """`desired` vs `running` is what makes a dead cluster visible."""
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    app.state.cluster.watch_interval = 60.0  # do not recover during this test
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        assert (await http.get("/cluster")).json()["desired"] is True
+
+        pid = (await http.get("/agent/backend")).json()["pid"]
+        os.kill(pid, signal.SIGKILL)
+        await asyncio.sleep(1.0)
+
+        status = (await http.get("/cluster")).json()
+        assert status["desired"] is True and status["running"] is False, "should read degraded"
+
+
+async def test_stop_disables_supervision(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """An explicit stop must not be undone by the supervisor."""
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    app.state.cluster.watch_interval = 0.2
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        await http.post("/cluster/stop")
+        await asyncio.sleep(1.0)
+
+        status = (await http.get("/cluster")).json()
+        assert status["running"] is False
+        assert status["desired"] is False
+        assert status["restarts"] == 0, "stopping is not a failure to recover from"

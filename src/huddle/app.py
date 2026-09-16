@@ -60,5 +60,5 @@ def create_app(config: HuddleConfig) -> FastAPI:
     app.state.cluster = cluster
     app.include_router(build_agent_router(service))
     app.include_router(build_cluster_router(cluster))
-    app.include_router(build_api_router(service, client))
+    app.include_router(build_api_router(service, client, cluster))
     return app

@@ -101,3 +101,31 @@ async def test_other_openai_routes_round_trip(client: httpx.AsyncClient, path: s
     response = await client.post(path, json={"model": "tiny", "prompt": "hi", "input": "hi"})
     assert response.status_code == 200
     assert response.json()
+
+
+async def test_health_reports_degraded_when_the_head_dies(
+    huddle_config: HuddleConfig,
+) -> None:
+    """A dead cluster must not keep answering "ok" to whatever is watching it."""
+    import asyncio
+    import os
+    import signal
+
+    from huddle.app import create_app as build
+
+    huddle_config.backend.autostart = False
+    app = build(huddle_config)
+    app.state.cluster.watch_interval = 60.0  # no recovery during this test
+
+    transport = httpx.ASGITransport(app=app)
+    http = httpx.AsyncClient(transport=transport, base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        assert (await http.get("/health")).json()["status"] == "ok"
+
+        os.kill((await http.get("/agent/backend")).json()["pid"], signal.SIGKILL)
+        await asyncio.sleep(1.0)
+
+        body = (await http.get("/health")).json()
+        assert body["status"] == "degraded"
+        assert "detail" in body
