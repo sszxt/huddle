@@ -23,14 +23,22 @@ SUDO=(sudo)
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 [ -x "$UV" ] || { echo "error: uv not found" >&2; exit 1; }
 
+# Run the environment's own entry point rather than `uv run`. Under `uv run` the
+# unit's main process is uv, which exits 143 when systemd stops it — so every
+# clean stop or restart was recorded as a failure — and killing the main PID
+# left the real server running for a moment. Deployments run `uv sync` first.
+(cd "$REPO_ROOT" && "$UV" sync --locked --quiet)
+HUDDLE="$REPO_ROOT/.venv/bin/huddle"
+[ -x "$HUDDLE" ] || { echo "error: $HUDDLE not found after uv sync" >&2; exit 1; }
+
 if [ "$MODE" = agent ]; then
     UNIT=huddle-agent.service
     DESC="Huddle node agent (worker)"
-    CMD="$UV run huddle agent"
+    CMD="$HUDDLE agent"
 else
     UNIT=huddle.service
     DESC="Huddle node (agent + OpenAI-compatible API)"
-    CMD="$UV run huddle serve"
+    CMD="$HUDDLE serve"
 fi
 
 echo "==> installing $UNIT for $USER in $REPO_ROOT"
@@ -46,10 +54,12 @@ Wants=network-online.target
 Type=exec
 User=$USER
 WorkingDirectory=$REPO_ROOT
-Environment=PATH=$(dirname "$UV"):/usr/local/bin:/usr/bin:/bin
+Environment=PATH=$REPO_ROOT/.venv/bin:$(dirname "$UV"):/usr/local/bin:/usr/bin:/bin
 ExecStart=$CMD
 Restart=on-failure
 RestartSec=5
+# 143 is SIGTERM's exit status: a stop we asked for, not a failure.
+SuccessExitStatus=143
 
 # A large GGUF takes real time to load, and a head node streams every remote
 # layer's weights to its peers before it will answer. Do not kill a slow start.

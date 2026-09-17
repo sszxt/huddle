@@ -13,9 +13,11 @@ Wants=network-online.target
 Type=exec
 User=edgeup
 WorkingDirectory=/home/edgeup/huddle
-ExecStart=/home/edgeup/.local/bin/uv run huddle agent
+ExecStart=/home/edgeup/huddle/.venv/bin/huddle agent
 Restart=on-failure
 RestartSec=5
+# 143 is SIGTERM's exit status: a stop we asked for, not a failure.
+SuccessExitStatus=143
 TimeoutStartSec=900
 KillMode=control-group
 KillSignal=SIGTERM
