@@ -28,6 +28,8 @@ from huddle.config import DiscoveryConfig, HuddleConfig, PeerConfig
 log = logging.getLogger("huddle.discovery")
 
 SERVICE_TYPE = "_huddle._tcp.local."
+ROLE_COORDINATOR = "coordinator"
+ROLE_WORKER = "worker"
 
 
 class DiscoveredPeer(BaseModel):
@@ -40,6 +42,13 @@ class DiscoveredPeer(BaseModel):
     llamacpp_version: str | None = None
     # Where multicast saw it, which may differ from `host` and is not stable.
     seen_at: str | None = None
+    # "coordinator" for a node running `huddle serve`, "worker" for
+    # `huddle agent`. Records from before roles existed carry none.
+    role: str | None = None
+
+    @property
+    def is_coordinator(self) -> bool:
+        return self.role == ROLE_COORDINATOR
 
     def to_peer(self) -> PeerConfig:
         return PeerConfig(
@@ -64,9 +73,19 @@ def _service_name(node_name: str) -> str:
 class Advertiser:
     """Announces this node on the LAN for as long as it is running."""
 
-    def __init__(self, config: HuddleConfig, llamacpp_version: str | None = None) -> None:
+    def __init__(
+        self,
+        config: HuddleConfig,
+        llamacpp_version: str | None = None,
+        *,
+        role: str = ROLE_WORKER,
+    ) -> None:
         self.config = config
         self.llamacpp_version = llamacpp_version
+        # A coordinator serves its agent routes on the API port, not on
+        # node.agent_port, so peers must not try to use it as a worker. Saying
+        # so in the record is what lets them tell.
+        self.role = role
         self._zc: AsyncZeroconf | None = None
         self._info: AsyncServiceInfo | None = None
 
@@ -86,6 +105,7 @@ class Advertiser:
             "connect": connect_host,
             "agent_port": str(self.config.node.agent_port),
             "rpc_port": str(self.config.rpc.port),
+            "role": self.role,
         }
         if self.llamacpp_version:
             properties["llamacpp"] = self.llamacpp_version
@@ -202,4 +222,5 @@ async def _resolve(
         rpc_port=int(_txt(properties, "rpc_port") or 50052),
         llamacpp_version=_txt(properties, "llamacpp"),
         seen_at=addresses[0] if addresses else None,
+        role=_txt(properties, "role"),
     )

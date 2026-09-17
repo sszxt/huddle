@@ -13,6 +13,7 @@ import pytest
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
+from tests.conftest import wait_until_running
 
 CHAT_BODY = {"model": "tiny", "messages": [{"role": "user", "content": "hi"}]}
 
@@ -72,6 +73,7 @@ async def test_requires_api_key_when_configured(huddle_config: HuddleConfig) -> 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://huddle.test") as http:
+            await wait_until_running(http)
             unauthorized = await http.post("/v1/chat/completions", json=CHAT_BODY)
             assert unauthorized.status_code == 401
 

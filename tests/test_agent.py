@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
@@ -68,3 +69,50 @@ async def test_start_rejects_missing_model(huddle_config: HuddleConfig) -> None:
             response = await http.post("/agent/backend/start", json={"model": "absent.gguf"})
             assert response.status_code == 409
             assert "model not found" in response.json()["detail"]
+
+
+async def test_logs_survive_a_failed_start(huddle_config: HuddleConfig, tmp_path: object) -> None:
+    """A crashed load is when its output matters most; it used to be discarded."""
+    from pathlib import Path
+
+    crash = Path(str(tmp_path)) / "crash-server"
+    crash.write_text("#!/bin/sh\necho 'E llama_model_load: something specific broke'\nexit 1\n")
+    crash.chmod(0o755)
+
+    huddle_config.backend.autostart = False
+    huddle_config.binaries.llama_server = crash
+    app = create_app(huddle_config)
+
+    transport = httpx.ASGITransport(app=app)
+    http = httpx.AsyncClient(transport=transport, base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        assert (await http.post("/agent/backend/start")).status_code == 409
+        lines = (await http.get("/agent/backend/logs")).json()["lines"]
+        assert any("something specific broke" in line for line in lines)
+
+
+async def test_placement_survives_a_verbose_flood(
+    huddle_config: HuddleConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real failure: -lv 5 output evicted layer placement within seconds."""
+    monkeypatch.setenv("HUDDLE_FAKE_LOG_FLOOD", "3000")
+    huddle_config.backend.autostart = False
+    huddle_config.backend.extra_args = ["-lv", "5"]
+    app = create_app(huddle_config)
+
+    transport = httpx.ASGITransport(app=app)
+    http = httpx.AsyncClient(transport=transport, base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        await http.post("/agent/backend/start")
+        placement = (await http.get("/agent/backend/placement")).json()["layers"]
+        await http.post("/agent/backend/stop")
+
+    # tiny.gguf has 12 layers, so 13 entries with the output head; -ngl all
+    # offloads every one of them.
+    assert "CPU" not in placement
+    assert placement["Vulkan0"] == list(range(13))
+
+
+async def test_placement_is_empty_without_verbose_logging(client: httpx.AsyncClient) -> None:
+    """At default verbosity llama.cpp prints nothing about placement."""
+    assert (await client.get("/agent/backend/placement")).json()["layers"] == {}

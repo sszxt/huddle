@@ -14,7 +14,8 @@ import httpx
 import pytest
 
 from huddle.app import create_app
-from huddle.config import HuddleConfig
+from huddle.config import HuddleConfig, PeerConfig
+from tests.conftest import wait_until_running
 
 # A GPU too small to hold the whole test model, so a peer is genuinely needed.
 # Without this the head fits everything locally and correctly drops the peer.
@@ -165,6 +166,7 @@ async def test_autostart_uses_the_cluster_when_peers_are_configured(
     app, http = await cluster_client(huddle_config)
 
     async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        await wait_until_running(http)
         argv = (await http.get("/agent/backend")).json()["argv"]
         assert "--rpc" in argv, "autostart ignored the configured peer"
 
@@ -181,6 +183,7 @@ async def test_autostart_stays_single_node_without_peers(huddle_config: HuddleCo
     app, http = await cluster_client(huddle_config)
 
     async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        await wait_until_running(http)
         argv = (await http.get("/agent/backend")).json()["argv"]
         assert "--rpc" not in argv
 
@@ -457,4 +460,65 @@ async def test_discovered_peers_get_their_workers_started(
         status = (await http.post("/cluster/start")).json()
         assert status["plan"]["rpc_endpoints"], "the discovered peer should be in --rpc"
         assert status["workers"] == ["peer1"], "and its worker must have been started"
+        await http.post("/cluster/stop")
+
+
+async def test_a_lost_worker_is_caught_before_a_request_fails(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """Seen on the real cluster: /health said "ok", the next completion got 500.
+
+    The head only notices a lost worker when it uses a remote layer, so the
+    supervisor asks the workers' agents instead, and restarts while idle.
+    """
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    cluster = app.state.cluster
+    cluster.watch_interval = 0.1
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        agent = f"http://127.0.0.1:{peer_agent['agent_port']}"
+        async with httpx.AsyncClient() as peer:
+            first = (await peer.get(f"{agent}/agent/rpc")).json()["pid"]
+            # The worker dies; nothing talks to the head.
+            await peer.post(f"{agent}/agent/rpc/stop")
+
+            for _ in range(100):
+                await asyncio.sleep(0.1)
+                state = (await peer.get(f"{agent}/agent/rpc")).json()
+                if cluster.status().restarts == 1 and cluster.status().running and state["running"]:
+                    break
+            else:
+                raise AssertionError(f"never recovered: {cluster.status()}")
+
+            assert state["pid"] != first, "a fresh worker is serving"
+        await http.post("/cluster/stop")
+
+
+async def test_an_unanswering_agent_is_not_a_lost_worker(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """Not being able to ask is not evidence: no restart on silence alone."""
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    cluster = app.state.cluster
+    cluster.watch_interval = 0.1
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+
+    async with app.router.lifespan_context(app), http:
+        await http.post("/cluster/start")
+        # Point the supervisor's view of the worker at an agent that never answers.
+        cluster._started_workers = [
+            PeerConfig(
+                name="peer1", host="127.0.0.1", agent_port=1, rpc_port=peer_agent["rpc_port"]
+            )
+        ]
+        pid = (await http.get("/agent/backend")).json()["pid"]
+        await asyncio.sleep(1.0)
+        assert (await http.get("/agent/backend")).json()["pid"] == pid, "no restart on silence"
+        cluster._started_workers = []
         await http.post("/cluster/stop")

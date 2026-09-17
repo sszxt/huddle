@@ -119,3 +119,30 @@ async def test_startup_logs_survive_a_flood_of_later_output(tmp_path: Path) -> N
     assert any("omitted" in line for line in combined), "a gap must be visible, not silent"
     assert any("noise 299" in line for line in combined), "recent lines kept too"
     assert process.startup_logs()[0] == "STARTUP marker"
+
+
+async def test_pinned_lines_survive_any_amount_of_output(tmp_path: Path) -> None:
+    """Placement is printed mid-run, then buried; it must still be recoverable."""
+    import re
+
+    script = tmp_path / "noisy.py"
+    script.write_text(
+        "for i in range(500): print(f'noise {i}', flush=True)\n"
+        "print('layer   7 assigned to device RPC0, is_swa = 0', flush=True)\n"
+        "for i in range(3000): print(f'more noise {i}', flush=True)\n"
+    )
+    process = ManagedProcess(
+        "noisy",
+        [sys.executable, str(script)],
+        log_capacity=50,
+        startup_capacity=50,
+        keep=[re.compile(r"assigned to device")],
+    )
+    await process.start()
+    await asyncio.sleep(1.0)
+    await process.stop()
+
+    assert not any("assigned to device" in line for line in process.logs()), (
+        "the ordinary buffers really did evict it"
+    )
+    assert process.pinned_logs() == ["layer   7 assigned to device RPC0, is_swa = 0"]

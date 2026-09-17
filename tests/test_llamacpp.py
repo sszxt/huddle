@@ -15,6 +15,7 @@ from huddle.llamacpp import (
     LlamaCppError,
     build_llama_server_argv,
     build_rpc_server_argv,
+    detect_out_of_memory,
     parse_devices,
     parse_layer_assignments,
     require_binary,
@@ -183,3 +184,43 @@ def test_version_commit_extraction() -> None:
     assert version_commit("version: 0.4.1-dev (build 10975, commit 4c9233c03)") == "4c9233c03"
     assert version_commit("nothing useful") is None
     assert version_commit(None) is None
+
+
+def test_detects_out_of_memory_and_the_device() -> None:
+    """Captured from the real boot failure on omarchy."""
+    golden = Path(__file__).parent / "golden" / "oom_vulkan_omarchy.txt"
+    oom = detect_out_of_memory(golden.read_text().splitlines())
+    assert oom.detected
+    assert oom.devices == {"Vulkan0"}
+
+
+def test_an_rpc_abort_is_not_mistaken_for_out_of_memory() -> None:
+    """The SIGABRT from an unreachable worker must not trigger a memory replan."""
+    golden = Path(__file__).parent / "golden" / "abort_rpc_unreachable_omarchy.txt"
+    assert not detect_out_of_memory(golden.read_text().splitlines()).detected
+
+
+def test_remote_device_names_lose_their_endpoint() -> None:
+    oom = detect_out_of_memory(
+        ["E alloc_tensor_range: failed to allocate RPC0[100.98.227.49:50052] buffer of size 9"]
+    )
+    assert oom.devices == {"RPC0"}
+
+
+def test_out_of_memory_without_a_device() -> None:
+    oom = detect_out_of_memory(["CUDA error: out of memory"])
+    assert oom.detected
+    assert oom.devices == frozenset()
+
+
+def test_ordinary_load_failures_are_not_out_of_memory() -> None:
+    assert not detect_out_of_memory(
+        ["E common_init_: failed to load model '/models/x.gguf'", "no such file"]
+    ).detected
+
+
+def test_llama_server_argv_log_file() -> None:
+    backend = BackendConfig(log_file=Path("/var/log/huddle/llama.log"))
+    argv = build_llama_server_argv(SERVER_BINARY, backend, MODEL)
+    assert argv[argv.index("--log-file") + 1] == "/var/log/huddle/llama.log"
+    assert "--log-file" not in build_llama_server_argv(SERVER_BINARY, BackendConfig(), MODEL)

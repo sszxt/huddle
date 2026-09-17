@@ -73,6 +73,11 @@ async def resolve_peers(config: HuddleConfig, local_version: str | None = None) 
         return peers
 
     for candidate in discovered:
+        if candidate.is_coordinator:
+            # Another head node. Its agent routes are not on the advertised
+            # port and its GPUs belong to its own model.
+            log.debug("discovery: %s is a coordinator, not a worker; skipping", candidate.name)
+            continue
         if candidate.name in known:
             log.info(
                 "discovery: %s already configured, keeping the configured entry", candidate.name

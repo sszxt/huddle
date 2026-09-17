@@ -1,0 +1,4 @@
+#3  0x00007effa7f3cace in ggml_abort () from /home/edgeup/llama.cpp/build/bin/libggml-base.so.0
+#4  0x00007effab5e6d37 in rpc_dispatcher::start(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) () from /home/edgeup/llama.cpp/build/bin/libggml-rpc.so.0
+#5  0x00007effab5e7cb0 in get_dispatcher(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) () from /home/edgeup/llama.cpp/build/bin/libggml-rpc.so.0
+#6  0x00007effab5eb179 in ggml_backend_rpc_add_server () from /home/edgeup/llama.cpp/build/bin/libggml-rpc.so.0

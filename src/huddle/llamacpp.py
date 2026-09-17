@@ -106,6 +106,8 @@ def build_llama_server_argv(
         argv += ["--alias", alias]
     if backend.api_key:
         argv += ["--api-key", backend.api_key]
+    if backend.log_file is not None:
+        argv += ["--log-file", str(backend.log_file)]
     argv += backend.extra_args
     return argv
 
@@ -256,3 +258,61 @@ def same_build(left: str | None, right: str | None) -> bool:
     if a is None or b is None:
         return True  # unknown on either side: do not block on a guess
     return a.startswith(b) or b.startswith(a)
+
+
+@dataclass(frozen=True)
+class OutOfMemory:
+    """What a failed load says about running out of device memory."""
+
+    detected: bool
+    # Device ids as the planner names them ("Vulkan0", "RPC0"). Empty when the
+    # log shows an OOM but not which device hit it.
+    devices: frozenset[str] = frozenset()
+
+
+# Lines seen on a real Vulkan out-of-memory load failure on omarchy:
+#   ggml_vulkan: vk::Device::allocateMemory: ErrorOutOfDeviceMemory
+#   E alloc_tensor_range: failed to allocate Vulkan0 buffer of size 1071374336
+#   E llama_model_load: error loading model: unable to allocate Vulkan0 buffer
+# "out of memory" covers the CUDA wording. "failed to load model" is deliberately
+# not a marker: it also follows failures that have nothing to do with memory.
+_OOM_MARKERS = (
+    "erroroutofdevicememory",
+    "out of memory",
+    "unable to allocate",
+    "failed to allocate",
+)
+
+# Remote devices are printed as "RPC0[100.98.227.49:50052]"; the planner knows
+# them as "RPC0", so the bracketed endpoint is dropped.
+_OOM_DEVICE = re.compile(
+    r"(?:failed|unable) to allocate (?P<device>[A-Za-z_]+\d+)(?:\[[^\]]*\])? buffer"
+)
+
+
+def detect_out_of_memory(lines: list[str]) -> OutOfMemory:
+    """Decide whether a failed start ran out of device memory, and where.
+
+    A plan is an estimate. llama.cpp's own --fit only adjusts arguments left
+    unset, and we set -ngl and --tensor-split explicitly, so nothing upstream
+    checks our numbers before the load fails. This reads the failure afterwards
+    so the coordinator can replan instead of giving up.
+    """
+    detected = False
+    devices: set[str] = set()
+    for line in lines:
+        lowered = line.lower()
+        if any(marker in lowered for marker in _OOM_MARKERS):
+            detected = True
+        match = _OOM_DEVICE.search(line)
+        if match:
+            devices.add(match.group("device"))
+    return OutOfMemory(detected=detected, devices=frozenset(devices))
+
+
+# Output worth keeping from a llama-server run however much else it prints:
+# where every layer went, and anything that looks like running out of memory.
+DIAGNOSTIC_LINES: tuple[re.Pattern[str], ...] = (
+    _LAYER_ASSIGNMENT,
+    re.compile("|".join(re.escape(marker) for marker in _OOM_MARKERS), re.IGNORECASE),
+)

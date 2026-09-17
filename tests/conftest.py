@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -65,13 +67,26 @@ def huddle_config(
     )
 
 
+async def wait_until_running(http: httpx.AsyncClient, timeout: float = 30.0) -> dict[str, Any]:
+    """Wait for autostart, which runs in the background so the API answers early."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        status: dict[str, Any] = (await http.get("/cluster")).json()
+        if status["running"]:
+            return status
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"cluster never came up: {status}")
+        await asyncio.sleep(0.1)
+
+
 @pytest.fixture
 async def client(huddle_config: HuddleConfig) -> AsyncIterator[httpx.AsyncClient]:
-    """The full app, with lifespan run so the backend actually starts."""
+    """The full app, with lifespan run and the backend actually started."""
     app = create_app(huddle_config)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://huddle.test") as http:
+            await wait_until_running(http)
             yield http
 
 
@@ -88,6 +103,56 @@ def free_ports() -> list[int]:
     finally:
         for sock in socks:
             sock.close()
+
+
+@contextlib.asynccontextmanager
+async def serve_agent(config: HuddleConfig) -> AsyncIterator[None]:
+    """Run a worker agent on its configured port for the duration of the block."""
+    import uvicorn
+
+    from huddle.agent.app import create_app as create_agent_app
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_agent_app(config),
+            host="127.0.0.1",
+            port=config.node.agent_port,
+            log_level="error",
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    deadline = asyncio.get_running_loop().time() + 15
+    while not server.started:
+        if asyncio.get_running_loop().time() > deadline:
+            raise RuntimeError("agent did not start")
+        await asyncio.sleep(0.05)
+    try:
+        yield
+    finally:
+        server.should_exit = True
+        await task
+
+
+def worker_config(
+    fake_llama_server: Path,
+    fake_rpc_server: Path | None,
+    models: Path,
+    agent_port: int,
+    rpc_port: int,
+) -> HuddleConfig:
+    models.mkdir(exist_ok=True)
+    return HuddleConfig.model_validate(
+        {
+            "node": {"name": "peer1", "agent_port": agent_port},
+            "binaries": {
+                "llama_server": str(fake_llama_server),
+                "rpc_server": str(fake_rpc_server) if fake_rpc_server else None,
+            },
+            "models": {"dir": str(models)},
+            "backend": {"autostart": False},
+            "rpc": {"port": rpc_port, "advertise": "127.0.0.1"},
+        }
+    )
 
 
 @pytest.fixture

@@ -62,7 +62,10 @@ def build_router(
         }
         if cluster is not None:
             cluster_status = cluster.status()
-            if cluster_status.degraded:
+            if cluster_status.starting:
+                body["status"] = "starting"
+                body["detail"] = "a start is in progress; large models take minutes to load"
+            elif cluster_status.degraded:
                 # The backend is meant to be up and is not. Saying "ok" here is
                 # how a dead cluster keeps looking healthy to whatever is
                 # watching it.

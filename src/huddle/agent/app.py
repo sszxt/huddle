@@ -27,6 +27,12 @@ class LogsResponse(BaseModel):
     lines: list[str]
 
 
+class PlacementResponse(BaseModel):
+    """Layer indices per device, as llama.cpp reported placing them."""
+
+    layers: dict[str, list[int]]
+
+
 def build_router(service: BackendService) -> APIRouter:
     router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -57,6 +63,10 @@ def build_router(service: BackendService) -> APIRouter:
     @router.get("/backend/logs")
     async def backend_logs() -> LogsResponse:
         return LogsResponse(lines=service.logs())
+
+    @router.get("/backend/placement")
+    async def backend_placement() -> PlacementResponse:
+        return PlacementResponse(layers=service.placement())
 
     @router.get("/rpc")
     async def rpc_status() -> RpcStatus:

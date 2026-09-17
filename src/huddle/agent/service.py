@@ -14,7 +14,13 @@ from pydantic import BaseModel
 
 from huddle.config import HuddleConfig
 from huddle.hardware import NodeHardware, probe
-from huddle.llamacpp import build_llama_server_argv, build_rpc_server_argv, require_binary
+from huddle.llamacpp import (
+    DIAGNOSTIC_LINES,
+    build_llama_server_argv,
+    build_rpc_server_argv,
+    parse_layer_assignments,
+    require_binary,
+)
 from huddle.process import ManagedProcess, ProcessError, ReadyCheck, tcp_is_open
 
 
@@ -53,6 +59,10 @@ class BackendService:
     def __init__(self, config: HuddleConfig) -> None:
         self.config = config
         self._process: ManagedProcess | None = None
+        # The most recent launch, kept even when it failed. A failed start is
+        # exactly when its output matters, and it used to be discarded with the
+        # process — /agent/backend/logs returned nothing after a crashed load.
+        self._last_attempt: ManagedProcess | None = None
         self._model: str | None = None
         self._lock = asyncio.Lock()
         self._rpc: ManagedProcess | None = None
@@ -78,7 +88,20 @@ class BackendService:
         )
 
     def logs(self) -> list[str]:
-        return self._process.logs() if self._process else []
+        """Output of the running backend, or of the last attempt if none runs."""
+        source = self._process or self._last_attempt
+        return source.logs() if source else []
+
+    def placement(self) -> dict[str, list[int]]:
+        """Where llama.cpp says each layer went, from its own verbose output.
+
+        Empty unless the backend runs with ``-lv 5``: at default verbosity
+        llama.cpp prints nothing about placement.
+        """
+        source = self._process or self._last_attempt
+        if source is None:
+            return {}
+        return parse_layer_assignments("\n".join(source.pinned_logs()))
 
     def hardware(self) -> NodeHardware:
         return probe(self.config.node.name, self.config.binaries.llama_server)
@@ -103,6 +126,12 @@ class BackendService:
             if self.running:
                 raise ProcessError("backend is already running; stop it first")
 
+            # Forget the previous attempt before validating anything. Otherwise a
+            # start that fails before launching (a missing model, say) would
+            # still show the old attempt's output, and a caller reading it for
+            # an out-of-memory signature would react to a failure that is not
+            # this one.
+            self._last_attempt = None
             binary = require_binary(self.config.binaries.llama_server, role="llama-server")
             model_path = self.config.models.resolve(model)
             if not model_path.exists():
@@ -120,7 +149,8 @@ class BackendService:
                 tensor_split=tensor_split,
                 alias=model_path.stem,
             )
-            process = ManagedProcess("llama-server", argv)
+            process = ManagedProcess("llama-server", argv, keep=DIAGNOSTIC_LINES)
+            self._last_attempt = process
             await process.start(ready=self._health_probe(), timeout=timeout)
 
             self._process = process

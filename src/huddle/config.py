@@ -77,6 +77,10 @@ class BackendConfig(Model):
     n_gpu_layers: int | str = "all"
     api_key: str | None = None
     autostart: bool = True
+    # Full llama.cpp output on disk (llama-server --log-file). Verbose output
+    # overwhelms journald and our in-memory buffers, and a failed load is exactly
+    # when the whole log is needed. Off until confirmed on the pinned build.
+    log_file: Path | None = None
     extra_args: list[str] = Field(default_factory=list)
 
 
@@ -111,9 +115,19 @@ class PlannerConfig(Model):
     """
 
     headroom: float = Field(default=0.15, ge=0.0, lt=1.0)
+    # Fixed margin per device, on top of `headroom`. Zero by default because the
+    # proportional headroom alone is what the real two-node cluster was verified
+    # with; raise it if loads fail near the limit.
+    reserve_mib: float = Field(default=0.0, ge=0.0)
     # Integrated GPUs advertise system RAM as if it were VRAM. Enabling this
     # takes them at their word, which is rarely what you want.
     use_unified_memory: bool = False
+    # A plan is an estimate. When a load runs out of device memory anyway, replan
+    # with more margin on the device that failed, this many times.
+    oom_retries: int = Field(default=2, ge=0)
+    # How much margin each retry adds. 1024 MiB mirrors llama.cpp's own
+    # --fit-target default, upstream's figure for a per-device safety margin.
+    oom_step_mib: float = Field(default=1024.0, gt=0.0)
 
 
 class DiscoveryConfig(Model):
@@ -137,6 +151,30 @@ class DiscoveryConfig(Model):
     # Refuse peers built from a different llama.cpp. The RPC handshake rejects
     # them anyway, but at connect time with an unhelpful message.
     require_matching_version: bool = True
+
+
+class SupervisorConfig(Model):
+    """How hard to try to keep a wanted cluster running."""
+
+    watch_interval: float = Field(default=5.0, gt=0)
+    # Restarts allowed before giving up. With backoff, 10 attempts span roughly
+    # twenty minutes — long enough to ride out a peer rebooting.
+    max_restarts: int = Field(default=10, ge=0)
+    # Failed restarts back off exponentially up to this many seconds, so a fast
+    # failing cause does not burn every attempt in half a minute.
+    backoff_max: float = Field(default=300.0, gt=0)
+    # Running this long without dying forgives earlier restarts. Without it a
+    # long-lived cluster with occasional crashes eventually exhausts the limit
+    # and stops recovering for good.
+    stable_after: float = Field(default=600.0, gt=0)
+    # While the cluster is coming up (after a start or a crash), a plan that
+    # leaves out an unreachable known peer is not accepted for this long.
+    # Otherwise a peer that is merely slower to boot shrinks the cluster — seen
+    # on the real nodes: a 32B came up with 34 of 64 layers on CPU.
+    peer_wait: float = Field(default=120.0, ge=0)
+    # While layers run on CPU, look this often for reachable peers the plan is
+    # not using, and replan to include them. 0 disables.
+    rejoin_interval: float = Field(default=60.0, ge=0)
 
 
 class PeerConfig(Model):
@@ -172,6 +210,7 @@ class HuddleConfig(Model):
     api: ApiConfig = Field(default_factory=ApiConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
+    supervisor: SupervisorConfig = Field(default_factory=SupervisorConfig)
     peers: list[PeerConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")

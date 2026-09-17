@@ -7,6 +7,7 @@ the agent alone, with no public surface.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
@@ -20,7 +21,7 @@ from huddle.api.app import make_client
 from huddle.config import HuddleConfig
 from huddle.coordinator.app import build_router as build_cluster_router
 from huddle.coordinator.service import ClusterService
-from huddle.discovery import Advertiser
+from huddle.discovery import ROLE_COORDINATOR, Advertiser
 
 log = logging.getLogger("huddle")
 
@@ -29,7 +30,7 @@ def create_app(config: HuddleConfig) -> FastAPI:
     service = BackendService(config)
     cluster = ClusterService(config, service)
     client = make_client()
-    advertiser = Advertiser(config)
+    advertiser = Advertiser(config, role=ROLE_COORDINATOR)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -40,27 +41,21 @@ def create_app(config: HuddleConfig) -> FastAPI:
             with contextlib.suppress(Exception):
                 await advertiser.start()
 
+        startup: asyncio.Task[object] | None = None
         if config.backend.autostart:
-            try:
-                if config.peers or config.discovery.enabled:
-                    # Starting the backend alone here would quietly run
-                    # single-node and leave every peer unused, which looks
-                    # identical to a working cluster from the outside.
-                    result = await cluster.start_with_retry()
-                    if result is not None:
-                        log.info(
-                            "cluster ready: model=%s workers=%s",
-                            result.model,
-                            ",".join(result.workers) or "none",
-                        )
-                else:
-                    status = await service.start()
-                    log.info("backend ready: model=%s pid=%s", status.model, status.pid)
-            except Exception as exc:
-                log.error("autostart failed: %s", exc)
+            # Always the cluster path, even with no peers: the planner skips
+            # integrated GPUs and fits the model where `-ngl all` would not.
+            # And in the background, because loading a large model takes
+            # minutes and the API — /health, /cluster, doctor — must answer
+            # meanwhile, which is exactly when someone is looking.
+            startup = asyncio.create_task(cluster.start_with_retry())
         try:
             yield
         finally:
+            if startup is not None and not startup.done():
+                startup.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await startup
             await advertiser.stop()
             await cluster.stop()
             await service.stop_rpc()

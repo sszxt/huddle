@@ -28,6 +28,7 @@ backend:
   ctx_size: 4096
   parallel: 1
   n_gpu_layers: all      # exact count, "auto", or "all"
+  log_file: null         # full llama.cpp output on disk (--log-file)
   extra_args: []
 
 # This node's rpc-server, when acting as a worker.
@@ -44,7 +45,19 @@ rpc:
 planner:
   headroom: 0.15            # fraction left for compute buffers; overshooting
                             # means an out-of-memory failure at load time
+  reserve_mib: 0            # fixed margin per device on top of headroom
   use_unified_memory: false # iGPUs advertise system RAM as VRAM; don't believe them
+  oom_retries: 2            # if a load runs out of memory anyway, replan with
+  oom_step_mib: 1024        # this much more margin on the device that failed
+                            # (1024 mirrors llama.cpp's own --fit-target)
+
+# Keeping a wanted cluster running.
+supervisor:
+  watch_interval: 5         # seconds between health checks
+  max_restarts: 10          # then give up and report degraded; with backoff this
+                            # spans ~20 minutes, enough to ride out a peer reboot
+  backoff_max: 300          # failed restarts back off exponentially up to this
+  stable_after: 600         # a healthy run this long forgives earlier restarts
 
 # The public OpenAI-compatible API.
 api:

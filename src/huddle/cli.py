@@ -193,7 +193,7 @@ def plan(
     for warning in result.warnings:
         typer.secho(f"  ! {warning}", fg=typer.colors.YELLOW)
     typer.echo("  flags:")
-    typer.echo(f"    -ngl {result.n_gpu_layers}")
+    typer.echo(f"    -ngl {result.ngl}   ({result.n_gpu_layers} layers + output head)")
     if result.tensor_split:
         typer.echo(f"    --tensor-split {','.join(f'{v:g}' for v in result.tensor_split)}")
     if endpoints:

@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import signal
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 ReadyCheck = Callable[[], Awaitable[bool]]
 
@@ -37,6 +38,8 @@ class ManagedProcess:
         env: dict[str, str] | None = None,
         log_capacity: int = 400,
         startup_capacity: int = 300,
+        keep: Sequence[re.Pattern[str]] = (),
+        keep_capacity: int = 2000,
     ) -> None:
         self.name = name
         self.argv = argv
@@ -49,6 +52,12 @@ class ManagedProcess:
         self._startup: list[str] = []
         self._startup_capacity = startup_capacity
         self._recent: deque[str] = deque(maxlen=log_capacity)
+        # Lines matching `keep` are retained on their own, wherever they fall.
+        # Layer placement is printed *after* model loading, past the startup
+        # window, and a verbose run's later output evicts it from the rolling
+        # buffer within seconds — yet it is exactly what a health check needs.
+        self._keep = tuple(keep)
+        self._pinned: deque[str] = deque(maxlen=keep_capacity)
         self._seen = 0
         self._drain_task: asyncio.Task[None] | None = None
 
@@ -63,6 +72,10 @@ class ManagedProcess:
     @property
     def returncode(self) -> int | None:
         return self._process.returncode if self._process else None
+
+    def pinned_logs(self) -> list[str]:
+        """Lines matching the `keep` patterns, in order, never evicted by volume."""
+        return list(self._pinned)
 
     def startup_logs(self) -> list[str]:
         """The process's first lines, which never get evicted."""
@@ -106,7 +119,9 @@ class ManagedProcess:
 
         try:
             await self._await_ready(ready, timeout)
-        except Exception:
+        except BaseException:
+            # Including cancellation: a service shutting down mid-load must not
+            # leave a llama-server holding the GPU and the port.
             await self.stop()
             raise
 
@@ -165,6 +180,8 @@ class ManagedProcess:
     def _record(self, line: str) -> None:
         """Keep the first lines forever, then roll the rest."""
         self._seen += 1
+        if self._keep and any(pattern.search(line) for pattern in self._keep):
+            self._pinned.append(line)
         if len(self._startup) < self._startup_capacity:
             self._startup.append(line)
         else:
