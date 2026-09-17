@@ -30,6 +30,15 @@ def _load(path: Path) -> HuddleConfig:
         raise typer.Exit(code=2) from exc
 
 
+def _configure_logging() -> None:
+    """Route Huddle's own log records to stderr for both long-running commands.
+
+    uvicorn configures only its own loggers. Without this, discovery, worker
+    starts and orphan warnings on a worker node went nowhere at all.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+
+
 @app.command()
 def version() -> None:
     """Print the Huddle version."""
@@ -77,7 +86,7 @@ def serve(
     from huddle.app import create_app
 
     settings = _load(config)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
+    _configure_logging()
     uvicorn.run(
         create_app(settings),
         host=host or settings.api.host,
@@ -95,6 +104,7 @@ def agent(config: ConfigOption = DEFAULT_CONFIG) -> None:
 
     settings = _load(config)
     settings.backend.autostart = False
+    _configure_logging()
     uvicorn.run(
         create_app(settings),
         host=settings.node.agent_host,
@@ -228,3 +238,4 @@ def discover(
             typer.echo(f"    seen at      {peer.seen_at}  (link-local, not used)")
         if peer.llamacpp_version:
             typer.echo(f"    llama.cpp    {peer.llamacpp_version}")
+
