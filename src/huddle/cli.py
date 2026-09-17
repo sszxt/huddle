@@ -239,3 +239,30 @@ def discover(
         if peer.llamacpp_version:
             typer.echo(f"    llama.cpp    {peer.llamacpp_version}")
 
+
+@app.command()
+def doctor(
+    config: ConfigOption = DEFAULT_CONFIG,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output")] = False,
+) -> None:
+    """Check this node and the cluster, and explain anything wrong."""
+    import asyncio
+
+    import httpx
+
+    from huddle.doctor import Report, api_base_url, render, run_doctor
+
+    settings = _load(config)
+
+    async def go() -> Report:
+        async with httpx.AsyncClient(base_url=api_base_url(settings)) as api:
+            return await run_doctor(settings, api)
+
+    report = asyncio.run(go())
+    if as_json:
+        typer.echo(json.dumps(report.as_dict(), indent=2))
+    else:
+        for line in render(report):
+            typer.echo(line)
+    if not report.healthy:
+        raise typer.Exit(code=1)
