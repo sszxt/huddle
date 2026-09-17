@@ -125,6 +125,11 @@ class DiscoveryConfig(Model):
 
     enabled: bool = False
     timeout: float = Field(default=3.0, gt=0)
+    # Browses to make before giving up. At boot the network may not be ready and
+    # peers may still be booting, so a single short browse finds nothing and the
+    # cluster silently plans as a single node — which for a large model means an
+    # out-of-memory failure rather than a small cluster.
+    attempts: int = Field(default=3, ge=1)
     # The address peers should dial us on, which is deliberately not the address
     # multicast sees: that one is a DHCP lease and moves. Defaults to
     # ``rpc.advertise`` when unset.

@@ -357,3 +357,104 @@ async def test_switch_rejects_a_missing_model(huddle_config: HuddleConfig) -> No
     async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
         response = await http.post("/cluster/model", json={"model": "nope.gguf"})
         assert response.status_code == 409
+
+
+async def test_failed_autostart_keeps_retrying(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """A boot-time failure must not leave a dead node needing a human.
+
+    This is the real scenario: omarchy booted, discovery found no peers yet
+    because the network was not ready, the model would not fit on one GPU, and
+    the service sat failed until someone noticed.
+    """
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    cluster = app.state.cluster
+    cluster.watch_interval = 0.2
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        # Point at a model that does not exist, so the first attempt fails.
+        result = await cluster.start_with_retry("missing.gguf")
+        assert result is None, "the first attempt should have failed"
+
+        status = (await http.get("/cluster")).json()
+        assert status["desired"] is True, "must still be wanted, so the supervisor retries"
+        assert status["running"] is False
+        assert "initial start failed" in status["last_failure"]
+
+        # The supervisor should be trying, not sitting idle.
+        await asyncio.sleep(1.5)
+        assert (await http.get("/cluster")).json()["restarts"] > 0
+
+        await http.post("/cluster/stop")
+
+
+async def test_recovers_once_the_cause_clears(
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
+) -> None:
+    """Retrying is only useful if it succeeds when the transient cause passes."""
+    from tests.fakes.gguf_builder import write_gguf
+
+    huddle_config.backend.autostart = False
+    with_peer(huddle_config, peer_agent)
+    app = create_app(huddle_config)
+    cluster = app.state.cluster
+    cluster.watch_interval = 0.2
+
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
+    async with app.router.lifespan_context(app), http:
+        assert await cluster.start_with_retry("late.gguf") is None
+
+        # The model appears, as a booting peer would.
+        write_gguf(huddle_config.models.dir / "late.gguf", n_layers=12, n_embd=256)
+
+        for _ in range(60):
+            await asyncio.sleep(0.25)
+            if (await http.get("/cluster")).json()["running"]:
+                break
+        else:
+            raise AssertionError("never recovered once the cause cleared")
+
+        assert (await http.get("/cluster")).json()["model"] == "late.gguf"
+        await http.post("/cluster/stop")
+
+
+async def test_discovered_peers_get_their_workers_started(
+    huddle_config: HuddleConfig,
+    peer_agent: dict[str, int],
+    constrained_gpus: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A discovered peer must have its worker started, not just be named in --rpc.
+
+    The head connects to every --rpc endpoint at load and aborts if one has
+    nothing behind it. Reading peers from static config here silently skipped
+    every discovered peer while still passing its address to llama.cpp.
+    """
+    from huddle.discovery import DiscoveredPeer
+
+    async def fake_discover(*_args: object, **_kw: object) -> list[DiscoveredPeer]:
+        return [
+            DiscoveredPeer(
+                name="peer1",
+                host="127.0.0.1",
+                agent_port=peer_agent["agent_port"],
+                rpc_port=peer_agent["rpc_port"],
+            )
+        ]
+
+    monkeypatch.setattr("huddle.coordinator.cluster.discover", fake_discover)
+
+    huddle_config.backend.autostart = False
+    huddle_config.peers = []  # discovery only, as in the real deployment
+    huddle_config.discovery.enabled = True
+    app, http = await cluster_client(huddle_config)
+
+    async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+        status = (await http.post("/cluster/start")).json()
+        assert status["plan"]["rpc_endpoints"], "the discovered peer should be in --rpc"
+        assert status["workers"] == ["peer1"], "and its worker must have been started"
+        await http.post("/cluster/stop")

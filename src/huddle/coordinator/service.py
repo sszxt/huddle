@@ -97,6 +97,10 @@ class ClusterService:
         self._restarts = 0
         self._last_failure: str | None = None
         self._watcher: asyncio.Task[None] | None = None
+        # Peers as of the last plan: static config *plus* anything discovered.
+        # Reading config.peers here instead would miss every discovered peer and
+        # start no workers, while still passing their endpoints to --rpc.
+        self._resolved_peers: list[PeerConfig] = []
 
     def status(self) -> ClusterStatus:
         return ClusterStatus(
@@ -142,6 +146,7 @@ class ClusterService:
             devices, endpoints = build_device_list(local, active)
             plan = self._plan_for(info, devices, ctx)
 
+        self._resolved_peers = [report.peer for report in reports]
         return _to_cluster_plan(info, plan, endpoints, reports)
 
     def _plan_for(self, info: ModelInfo, devices: list[PlacementDevice], n_ctx: int) -> Plan:
@@ -161,6 +166,25 @@ class ClusterService:
         self._start_watching()
         return status
 
+    async def start_with_retry(self, model: str | None = None) -> ClusterStatus | None:
+        """Start, and keep trying in the background if the first attempt fails.
+
+        Autostart failures are usually transient: a peer still booting, a network
+        not yet carrying multicast. Marking the cluster as wanted *before*
+        attempting means the supervisor keeps retrying instead of leaving a dead
+        node that needs a human. Returns None if the first attempt failed.
+        """
+        self._desired = True
+        self._model_name = model
+        self._start_watching()
+        try:
+            async with self._lock:
+                return await self._start_locked(model)
+        except Exception as exc:
+            self._last_failure = f"initial start failed: {exc}"
+            log.error("%s; retrying in the background", self._last_failure)
+            return None
+
     async def _start_locked(self, model: str | None = None) -> ClusterStatus:
         """Bring the cluster up. Caller holds the lock."""
         if self.backend.running:
@@ -170,8 +194,10 @@ class ClusterService:
         for warning in plan.warnings:
             log.warning("%s", warning)
 
-        # Only peers actually carrying layers are worth starting.
-        wanted = _peers_with_layers(self.config.peers, plan)
+        # Only peers actually carrying layers are worth starting — and from the
+        # resolved list, which includes discovered peers. config.peers is empty
+        # when discovery is doing the work.
+        wanted = _peers_with_layers(self._resolved_peers, plan)
         await self._start_workers(wanted)
 
         try:

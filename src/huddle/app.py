@@ -42,16 +42,17 @@ def create_app(config: HuddleConfig) -> FastAPI:
 
         if config.backend.autostart:
             try:
-                if config.peers:
+                if config.peers or config.discovery.enabled:
                     # Starting the backend alone here would quietly run
-                    # single-node and leave every configured peer unused, which
-                    # looks identical to a working cluster from the outside.
-                    result = await cluster.start()
-                    log.info(
-                        "cluster ready: model=%s workers=%s",
-                        result.model,
-                        ",".join(result.workers) or "none",
-                    )
+                    # single-node and leave every peer unused, which looks
+                    # identical to a working cluster from the outside.
+                    result = await cluster.start_with_retry()
+                    if result is not None:
+                        log.info(
+                            "cluster ready: model=%s workers=%s",
+                            result.model,
+                            ",".join(result.workers) or "none",
+                        )
                 else:
                     status = await service.start()
                     log.info("backend ready: model=%s pid=%s", status.model, status.pid)

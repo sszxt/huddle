@@ -181,3 +181,36 @@ async def test_shallow_clone_build_number_is_not_a_mismatch(
     huddle_config.discovery.enabled = True
     resolved = await resolve_peers(huddle_config, SHALLOW_SAME_COMMIT)
     assert [p.name for p in resolved] == ["maksood"], "same commit must be compatible"
+
+
+async def test_discovery_retries_before_giving_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """At boot the first browse often finds nothing; a single try is not enough."""
+    from huddle import discovery
+
+    calls = {"n": 0}
+
+    async def flaky(*_args: object, **_kw: object) -> list[DiscoveredPeer]:
+        calls["n"] += 1
+        return [peer("late", "100.64.0.5")] if calls["n"] >= 3 else []
+
+    monkeypatch.setattr(discovery, "_browse_once", flaky)
+    found = await discovery.discover(DiscoveryConfig(attempts=4, timeout=0.01))
+
+    assert [p.name for p in found] == ["late"]
+    assert calls["n"] == 3, "should stop as soon as something answers"
+
+
+async def test_discovery_gives_up_after_configured_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from huddle import discovery
+
+    calls = {"n": 0}
+
+    async def never(*_args: object, **_kw: object) -> list[DiscoveredPeer]:
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(discovery, "_browse_once", never)
+    assert await discovery.discover(DiscoveryConfig(attempts=3, timeout=0.01)) == []
+    assert calls["n"] == 3

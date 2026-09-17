@@ -125,13 +125,36 @@ def _local_address() -> str:
 
 
 async def discover(
-    config: DiscoveryConfig, *, exclude: str | None = None, timeout: float | None = None
+    config: DiscoveryConfig,
+    *,
+    exclude: str | None = None,
+    timeout: float | None = None,
+    attempts: int | None = None,
 ) -> list[DiscoveredPeer]:
-    """Browse the LAN for Huddle nodes.
+    """Browse the LAN for Huddle nodes, retrying until something answers.
+
+    Retries matter at boot: the service starts shortly after
+    network-online.target, but multicast may not work yet and peers may still be
+    starting. A single short browse then returns nothing, the cluster plans as a
+    single node, and a large model fails to load at all.
 
     Never raises: discovery failing should leave a cluster running on its static
     peers, not stop it starting.
     """
+    tries = attempts if attempts is not None else config.attempts
+    for attempt in range(1, tries + 1):
+        found = await _browse_once(config, exclude=exclude, timeout=timeout)
+        if found or attempt == tries:
+            if not found:
+                log.info("discovery: nothing found after %d browses", tries)
+            return found
+        log.info("discovery: nothing found (browse %d/%d), retrying", attempt, tries)
+    return []
+
+
+async def _browse_once(
+    config: DiscoveryConfig, *, exclude: str | None = None, timeout: float | None = None
+) -> list[DiscoveredPeer]:
     found: dict[str, DiscoveredPeer] = {}
     pending: list[asyncio.Task[None]] = []
     zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
