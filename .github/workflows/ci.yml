@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned by commit, as setup-uv's own README does. uv then picks Python
+      # from .python-version, the same interpreter the nodes use.
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # --locked fails if pyproject.toml changed without uv.lock being updated.
+      - run: uv sync --locked
+
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+      # Everything here runs against the fake llama.cpp binaries in tests/fakes;
+      # a green run says the code does what it was told, not that a cluster works.
+      - run: uv run pytest -q
