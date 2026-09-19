@@ -102,7 +102,10 @@ async def test_gives_up_waiting_and_starts_smaller(head: tuple[Any, httpx.AsyncC
     """A smaller cluster that says so beats no cluster."""
     app, _ = head
     cluster = app.state.cluster
-    cluster.peer_wait = 0.5
+    # Short, but not so short that probing local hardware (a real subprocess
+    # spawn) can eat the whole window on a slow filesystem/runner and make
+    # the "still waiting" check never actually run.
+    cluster.peer_wait = 3.0
 
     assert await cluster.start_with_retry() is None
     await eventually(lambda: cluster.status().running)
