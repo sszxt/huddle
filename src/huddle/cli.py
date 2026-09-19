@@ -241,6 +241,22 @@ def discover(
 
 
 @app.command()
+def tui(
+    config: ConfigOption = DEFAULT_CONFIG,
+    interval: Annotated[
+        float | None,
+        typer.Option(help="Refresh interval in seconds; defaults to supervisor.watch_interval"),
+    ] = None,
+) -> None:
+    """Interactive terminal dashboard: monitor and control the cluster."""
+    from huddle.tui.app import run_tui
+
+    settings = _load(config)
+    _configure_logging()
+    run_tui(settings, poll_interval=interval)
+
+
+@app.command()
 def doctor(
     config: ConfigOption = DEFAULT_CONFIG,
     as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output")] = False,
