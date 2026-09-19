@@ -18,3 +18,7 @@ vendor/
 # local config may contain host addresses / keys; commit huddle.example.yaml
 huddle.yaml
 .env
+
+# local-only agent working docs; never land on GitHub
+CLAUDE.md
+.claude/
