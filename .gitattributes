@@ -1,0 +1,6 @@
+# Every target this project runs on is Linux (the dev box may be Windows).
+# Force LF in the repo and in every checkout, regardless of a clone's local
+# core.autocrlf: a CRLF shebang line fails with "No such file or directory"
+# when a script is executed directly, which is exactly how the fake binaries
+# and the deploy scripts are run.
+* text=auto eol=lf
