@@ -19,6 +19,7 @@ from huddle.llamacpp import (
     build_llama_server_argv,
     build_rpc_server_argv,
     parse_layer_assignments,
+    parse_tokens_per_second,
     require_binary,
 )
 from huddle.process import ManagedProcess, ProcessError, ReadyCheck, tcp_is_open
@@ -33,6 +34,9 @@ class BackendStatus(BaseModel):
     base_url: str
     argv: list[str] = []
     returncode: int | None = None
+    # Latest generation speed from the backend's own logs. None before the
+    # first completion, or when nothing has been parsed yet.
+    tokens_per_sec: float | None = None
 
 
 class RpcStatus(BaseModel):
@@ -85,6 +89,9 @@ class BackendService:
             base_url=self.base_url,
             argv=self._process.argv if self._process else [],
             returncode=self._process.returncode if self._process else None,
+            tokens_per_sec=(
+                parse_tokens_per_second(self._process.pinned_logs()) if self._process else None
+            ),
         )
 
     def logs(self) -> list[str]:

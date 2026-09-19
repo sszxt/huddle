@@ -18,6 +18,7 @@ from huddle.llamacpp import (
     detect_out_of_memory,
     parse_devices,
     parse_layer_assignments,
+    parse_tokens_per_second,
     require_binary,
     same_build,
     version_commit,
@@ -217,6 +218,19 @@ def test_ordinary_load_failures_are_not_out_of_memory() -> None:
     assert not detect_out_of_memory(
         ["E common_init_: failed to load model '/models/x.gguf'", "no such file"]
     ).detected
+
+
+def test_parse_tokens_per_second_reads_the_latest_completion() -> None:
+    lines = [
+        "eval time =   100.00 ms /    10 runs (   10.00 ms per token,    10.00 tokens per second)",
+        "some unrelated line",
+        "eval time =    50.00 ms /    10 runs (    5.00 ms per token,    27.70 tokens per second)",
+    ]
+    assert parse_tokens_per_second(lines) == 27.70
+
+
+def test_parse_tokens_per_second_none_when_absent() -> None:
+    assert parse_tokens_per_second(["model loaded", "listening on http://..."]) is None
 
 
 def test_llama_server_argv_log_file() -> None:

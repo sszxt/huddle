@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from huddle.gpu import GpuSample, probe_gpu_samples
 from huddle.llamacpp import Device, LlamaCppError, binary_version, list_devices
 
 MEMINFO = Path("/proc/meminfo")
@@ -26,6 +27,11 @@ class DeviceInfo(BaseModel):
     free_mib: int | None = None
     is_rpc: bool = False
     unified_memory: bool = False
+    # Best-effort, NVIDIA-only, from `nvidia-smi` — never used for placement,
+    # only for display. None on non-NVIDIA devices or without nvidia-smi.
+    util_pct: int | None = None
+    temp_c: int | None = None
+    power_w: float | None = None
 
     @classmethod
     def from_device(cls, device: Device) -> DeviceInfo:
@@ -82,6 +88,65 @@ def _looks_unified(device: Device) -> bool:
     return any(hint in lowered for hint in _UNIFIED_HINTS)
 
 
+_NVIDIA_HINTS = ("nvidia", "geforce", "rtx", "quadro", "tesla")
+
+
+def _looks_nvidia(name: str) -> bool:
+    lowered = name.lower()
+    return any(hint in lowered for hint in _NVIDIA_HINTS)
+
+
+def _same_gpu(device_name: str, sample_name: str) -> bool:
+    a, b = device_name.lower(), sample_name.lower()
+    return a in b or b in a
+
+
+def _with_gpu_samples(devices: list[DeviceInfo], samples: list[GpuSample]) -> list[DeviceInfo]:
+    """Best-effort match of `nvidia-smi` samples onto llama.cpp's device list.
+
+    llama.cpp's device order and nvidia-smi's device order are not guaranteed
+    to agree, so this matches by name first. A single candidate device left
+    over alongside a single leftover sample is paired positionally; anything
+    still ambiguous (e.g. two unnamed matches) is left unmatched rather than
+    guessed, since a wrong pairing would be worse than a missing one.
+    """
+    if not samples:
+        return devices
+
+    remaining = list(samples)
+    matched: dict[int, GpuSample] = {}
+    for i, device in enumerate(devices):
+        if not _looks_nvidia(device.name):
+            continue
+        hit = next((s for s in remaining if _same_gpu(device.name, s.name)), None)
+        if hit is not None:
+            matched[i] = hit
+            remaining.remove(hit)
+
+    unmatched_indices = [
+        i for i, d in enumerate(devices) if _looks_nvidia(d.name) and i not in matched
+    ]
+    if len(unmatched_indices) == 1 and len(remaining) == 1:
+        matched[unmatched_indices[0]] = remaining[0]
+
+    if not matched:
+        return devices
+    return [
+        (
+            device.model_copy(
+                update={
+                    "util_pct": matched[i].util_pct,
+                    "temp_c": matched[i].temp_c,
+                    "power_w": matched[i].power_w,
+                }
+            )
+            if i in matched
+            else device
+        )
+        for i, device in enumerate(devices)
+    ]
+
+
 def read_memory() -> tuple[int, int]:
     """Return ``(total_mib, available_mib)`` for system RAM."""
     if not MEMINFO.exists():
@@ -109,7 +174,8 @@ def probe(name: str, llama_server: Path) -> NodeHardware:
         ram_available_mib=available,
     )
     try:
-        hardware.devices = [DeviceInfo.from_device(d) for d in list_devices(llama_server)]
+        devices = [DeviceInfo.from_device(d) for d in list_devices(llama_server)]
+        hardware.devices = _with_gpu_samples(devices, probe_gpu_samples())
         hardware.llamacpp_version = binary_version(llama_server)
     except LlamaCppError as exc:
         hardware.error = str(exc)

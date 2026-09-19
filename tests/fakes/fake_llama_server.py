@@ -20,6 +20,9 @@ Controlled by environment variables:
   HUDDLE_FAKE_LOG_FLOOD
                        lines of filler to print after startup, the way -lv 5
                        buries everything useful under noise
+  HUDDLE_FAKE_TOKENS_PER_SEC
+                       emit a canned "... tokens per second)" line after
+                       startup, to exercise BackendStatus.tokens_per_sec
 
 At -lv 5 it prints "layer N assigned to device X" lines using the rule measured
 on real hardware: entries 0..n_layer, the first n_layer+1-ngl on CPU, the rest
@@ -274,6 +277,12 @@ def main() -> int:
                 emit(args, line)
     for i in range(int(os.environ.get("HUDDLE_FAKE_LOG_FLOOD", "0"))):
         emit(args, f"0.00.000.000 D arg_name_suffix: '' ({i})")
+    tps = os.environ.get("HUDDLE_FAKE_TOKENS_PER_SEC")
+    if tps:
+        emit(
+            args,
+            f"eval time =   123.45 ms /    10 runs (  12.34 ms per token, {tps} tokens per second)",
+        )
     emit(args, f"fake llama-server listening on {args.host}:{args.port}")
     server.serve_forever()
     return 0

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -232,6 +233,29 @@ def parse_layer_assignments(output: str) -> dict[str, list[int]]:
     return placement
 
 
+# llama.cpp prints an "eval time = ... (N tokens per second)" line after each
+# completion. Loosely anchored on the trailing phrase only, since the exact
+# wording has not been checked against a real build (this dev box cannot run
+# llama.cpp) — verify against omarchy/maksood once reachable.
+_TOKENS_PER_SEC = re.compile(r"(?P<tps>[\d.]+)\s*tokens per second")
+
+
+def parse_tokens_per_second(lines: Sequence[str]) -> float | None:
+    """Latest generation speed from llama-server's own timing log lines.
+
+    Reads the *last* match, the same "last pass wins" approach as
+    `parse_layer_assignments`, since only the most recent completion's speed
+    means anything on a live dashboard. `None` when no such line has been
+    seen yet (e.g. before the first completion, or the backend is not running).
+    """
+    value: float | None = None
+    for line in lines:
+        match = _TOKENS_PER_SEC.search(line)
+        if match:
+            value = float(match.group("tps"))
+    return value
+
+
 # llama.cpp reports e.g. "version: 0.4.1-dev (build 10975, commit 4c9233c03)".
 # The build number counts commits since the root, so it depends on clone depth:
 # a --depth=1 clone of the *same* commit reports "build 1". Only the commit
@@ -311,8 +335,10 @@ def detect_out_of_memory(lines: list[str]) -> OutOfMemory:
 
 
 # Output worth keeping from a llama-server run however much else it prints:
-# where every layer went, and anything that looks like running out of memory.
+# where every layer went, anything that looks like running out of memory, and
+# the latest generation speed.
 DIAGNOSTIC_LINES: tuple[re.Pattern[str], ...] = (
     _LAYER_ASSIGNMENT,
     re.compile("|".join(re.escape(marker) for marker in _OOM_MARKERS), re.IGNORECASE),
+    _TOKENS_PER_SEC,
 )

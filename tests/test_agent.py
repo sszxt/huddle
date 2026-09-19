@@ -7,6 +7,7 @@ import pytest
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
+from tests.conftest import wait_until_running
 
 
 async def test_agent_health(client: httpx.AsyncClient) -> None:
@@ -116,3 +117,21 @@ async def test_placement_survives_a_verbose_flood(
 async def test_placement_is_empty_without_verbose_logging(client: httpx.AsyncClient) -> None:
     """At default verbosity llama.cpp prints nothing about placement."""
     assert (await client.get("/agent/backend/placement")).json()["layers"] == {}
+
+
+async def test_tokens_per_sec_is_none_before_any_completion(client: httpx.AsyncClient) -> None:
+    status = (await client.get("/agent/backend")).json()
+    assert status["tokens_per_sec"] is None
+
+
+async def test_tokens_per_sec_is_parsed_from_the_backend_log(
+    huddle_config: HuddleConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HUDDLE_FAKE_TOKENS_PER_SEC", "27.7")
+    app = create_app(huddle_config)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://huddle.test") as http:
+            await wait_until_running(http)
+            status = (await http.get("/agent/backend")).json()
+            assert status["tokens_per_sec"] == 27.7
