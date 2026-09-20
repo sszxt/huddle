@@ -1,114 +1,148 @@
-"""Smoke test: the TUI mounts, renders a snapshot, and its actions call the
-poller — driven entirely against a stubbed `ClusterPoller`, never real
-network I/O. Nothing here proves the *data* is right; `test_tui_poller.py`
-covers that. This only proves the widget tree comes up and wiring works.
+"""HuddleTUI's action wiring, driven directly (no real terminal involved).
+
+`_stop_cluster_confirmed`/`_switch_model_prompt` own the interactive
+`input()` prompts; the underlying `_stop_cluster`/`_switch_model`/
+`_start_cluster` methods they delegate to are what's tested here, exactly
+the same split `poller.py`'s controls already have (ask vs. act).
 """
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from huddle.config import HuddleConfig
 from huddle.coordinator.service import ClusterStatus
-from huddle.hardware import DeviceInfo, NodeHardware
 from huddle.tui.app import HuddleTUI
 from huddle.tui.poller import ClusterPoller, ClusterSnapshot, NodeSnapshot
 
 
-def _canned_snapshot() -> ClusterSnapshot:
-    head = NodeSnapshot(
-        name="head1",
-        role="head",
-        reachable=True,
-        hardware=NodeHardware(
-            name="head1",
-            devices=[
-                DeviceInfo(
-                    id="Vulkan0", name="NVIDIA GeForce RTX 5070", total_mib=12227, free_mib=9000
-                )
-            ],
-            cpu_count=8,
-            ram_total_mib=32768,
-            ram_available_mib=20000,
-        ),
-        layers=13,
+def _config() -> HuddleConfig:
+    return HuddleConfig.model_validate(
+        {
+            "node": {"name": "head1"},
+            "binaries": {"llama_server": "/opt/llama-server"},
+            "models": {"dir": "/models"},
+            "api": {"host": "127.0.0.1", "port": 8000},
+        }
     )
-    return ClusterSnapshot(
+
+
+def _snapshot(**overrides: object) -> ClusterSnapshot:
+    defaults: dict[str, object] = dict(
         fetched_at=0.0,
-        cluster=ClusterStatus(running=True, model="tiny.gguf", head_node="head1"),
-        nodes=[head],
-        available_models=["tiny.gguf"],
+        cluster=ClusterStatus(running=True, head_node="head1", model="tiny.gguf"),
+        nodes=[NodeSnapshot(name="head1", role="head", reachable=True, layers=13)],
+        available_models=["tiny.gguf", "other.gguf"],
         loaded_model="tiny.gguf",
     )
+    defaults.update(overrides)
+    return ClusterSnapshot(**defaults)  # type: ignore[arg-type]
 
 
-@pytest.fixture(autouse=True)
-def _stub_poller(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_refresh_populates_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
-        return _canned_snapshot()
-
-    async def fake_head_logs(self: ClusterPoller) -> list[str]:
-        return ["fake llama-server listening on 127.0.0.1:8080"]
-
-    async def fake_aclose(self: ClusterPoller) -> None:
-        return None
+        return _snapshot()
 
     monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
-    monkeypatch.setattr(ClusterPoller, "head_logs", fake_head_logs)
-    monkeypatch.setattr(ClusterPoller, "aclose", fake_aclose)
+
+    app = HuddleTUI(_config())
+    await app._refresh()
+
+    assert app.snapshot is not None
+    assert app.snapshot.nodes[0].name == "head1"
+    assert app.message is None
 
 
-async def test_mounts_one_node_box_per_snapshot_node(huddle_config: HuddleConfig) -> None:
-    app = HuddleTUI(huddle_config)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        assert len(app.query(".node-box")) == 1
-        assert app.snapshot is not None
-        assert app.snapshot.nodes[0].name == "head1"
-
-
-async def test_q_quits_cleanly(huddle_config: HuddleConfig) -> None:
-    app = HuddleTUI(huddle_config)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("q")
-
-
-async def test_start_action_calls_the_poller(
-    huddle_config: HuddleConfig, monkeypatch: pytest.MonkeyPatch
+async def test_refresh_records_a_poll_failure_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
+
+    app = HuddleTUI(_config())
+    await app._refresh()  # must not raise
+
+    assert app.message is not None
+    assert "connection refused" in app.message
+
+
+async def test_start_cluster_calls_the_poller(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     async def fake_start(self: ClusterPoller, model: str | None = None) -> ClusterStatus:
         calls.append("start")
         return ClusterStatus(running=True, head_node="head1")
 
-    monkeypatch.setattr(ClusterPoller, "start_cluster", fake_start)
+    async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
+        return _snapshot()
 
-    app = HuddleTUI(huddle_config)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.action_start_cluster()
-        await pilot.pause()
+    monkeypatch.setattr(ClusterPoller, "start_cluster", fake_start)
+    monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
+
+    app = HuddleTUI(_config())
+    await app._start_cluster()
 
     assert calls == ["start"]
+    assert app.snapshot is not None  # _start_cluster refreshes afterward
 
 
-async def test_stop_action_requires_confirmation(
-    huddle_config: HuddleConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Pressing 'x' opens a confirmation modal rather than stopping immediately."""
+async def test_stop_cluster_calls_the_poller(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     async def fake_stop(self: ClusterPoller) -> ClusterStatus:
         calls.append("stop")
         return ClusterStatus(running=False, head_node="head1")
 
-    monkeypatch.setattr(ClusterPoller, "stop_cluster", fake_stop)
+    async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
+        return _snapshot(cluster=ClusterStatus(running=False, head_node="head1"))
 
-    app = HuddleTUI(huddle_config)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.action_stop_cluster()
-        await pilot.pause()
-        assert calls == [], "must wait for confirmation before stopping"
+    monkeypatch.setattr(ClusterPoller, "stop_cluster", fake_stop)
+    monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
+
+    app = HuddleTUI(_config())
+    await app._stop_cluster()
+
+    assert calls == ["stop"]
+
+
+async def test_switch_model_calls_the_poller_with_the_chosen_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_switch(self: ClusterPoller, model: str) -> ClusterStatus:
+        calls.append(model)
+        return ClusterStatus(running=True, head_node="head1", model=model)
+
+    async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
+        return _snapshot()
+
+    monkeypatch.setattr(ClusterPoller, "switch_model", fake_switch)
+    monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
+
+    app = HuddleTUI(_config())
+    await app._switch_model("other.gguf")
+
+    assert calls == ["other.gguf"]
+
+
+async def test_start_failure_sets_a_message_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_start(self: ClusterPoller, model: str | None = None) -> ClusterStatus:
+        raise httpx.ConnectError("boom")
+
+    async def fake_poll(self: ClusterPoller) -> ClusterSnapshot:
+        return _snapshot()
+
+    monkeypatch.setattr(ClusterPoller, "start_cluster", fake_start)
+    monkeypatch.setattr(ClusterPoller, "poll", fake_poll)
+
+    app = HuddleTUI(_config())
+    await app._start_cluster()  # must not raise
+
+    assert app.message is not None
+    assert "boom" in app.message

@@ -252,7 +252,10 @@ def tui(
     from huddle.tui.app import run_tui
 
     settings = _load(config)
-    _configure_logging()
+    # Deliberately no _configure_logging(): rich.Live owns the terminal here,
+    # and a library's INFO-level log line (httpx logs one per HTTP request)
+    # writing straight to stderr corrupts the screen instead of appearing
+    # in a log pane.
     run_tui(settings, poll_interval=interval)
 
 
