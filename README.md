@@ -16,14 +16,19 @@ starts and supervises the processes, and puts an OpenAI-compatible API in front.
 
 ## Status
 
-Working on a two-node cluster (two RTX 5070s, one Arch and one Ubuntu node):
-a 32B Q4_K_M model that fits on neither GPU alone serves at ~16 tok/s, split
-across both.
+Two-node cluster (two RTX 5070s, one Arch and one Ubuntu node): a 32B Q4_K_M
+model that fits on neither GPU alone serves at 27.7 tok/s generation, fully
+offloaded and split across both.
 
 - **v0** — single node behind an OpenAI-compatible API
 - **v1** — multi-node layer split, supervision and restart, model switching,
   systemd units
 - **v2** — peer discovery over mDNS
+- **v3** — capacity-aware placement (out-of-memory replanning, peer rejoin)
+  plus `huddle tui`, a terminal dashboard for watching and controlling the
+  cluster, with best-effort GPU utilization/temperature/power and generation
+  speed. The dashboard and its metrics are demoed and unit-tested against fake
+  binaries; not yet confirmed against a live cluster.
 
 More nodes add capacity, not speed: pipeline parallelism runs one stage at a
 time, and every node boundary costs a network round trip per token.
@@ -41,6 +46,7 @@ cp huddle.example.yaml huddle.yaml   # point it at your llama.cpp build and mode
 uv run huddle doctor                 # checks the node, peers and live cluster
 uv run huddle plan                   # shows how layers would be split
 uv run huddle serve                  # agent + OpenAI-compatible API
+uv run huddle tui                    # terminal dashboard: monitor and control it
 ```
 
 On worker nodes, `uv run huddle agent` runs the agent alone.
