@@ -51,6 +51,7 @@ class ClusterSnapshot:
     # Set when this node has no /cluster route at all (an agent-only worker),
     # so the dashboard can say so instead of showing an empty cluster.
     coordinator_error: str | None = None
+    log_lines: list[str] = field(default_factory=list)
 
 
 class ClusterPoller:
@@ -121,6 +122,7 @@ class ClusterPoller:
             nodes=nodes,
             available_models=available_models,
             loaded_model=loaded_model,
+            log_lines=await self._fetch_logs(client, base),
         )
 
     async def _local_only_snapshot(self, client: httpx.AsyncClient, base: str) -> ClusterSnapshot:
@@ -145,6 +147,7 @@ class ClusterPoller:
             cluster=None,
             nodes=[node],
             coordinator_error="not a coordinator: this node exposes /agent/* only",
+            log_lines=await self._fetch_logs(client, base),
         )
 
     async def _head_snapshot(
@@ -236,10 +239,8 @@ class ClusterPoller:
         layers: dict[str, list[int]] = response.json().get("layers", {})
         return layers
 
-    async def head_logs(self) -> list[str]:
-        """Recent output from the head's own backend, for a log pane."""
-        client = await self._get_client()
-        base = api_base_url(self.config)
+    async def _fetch_logs(self, client: httpx.AsyncClient, base: str) -> list[str]:
+        """Recent output from this node's own backend, for a log pane."""
         try:
             response = await client.get(f"{base}/agent/backend/logs", timeout=10.0)
             response.raise_for_status()
