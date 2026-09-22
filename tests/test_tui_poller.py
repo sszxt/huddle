@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import pytest
 
+from huddle import hfhub
 from huddle.agent.app import create_app as create_agent_app
 from huddle.app import create_app
 from huddle.config import HuddleConfig
@@ -127,3 +128,64 @@ async def test_agent_only_node_reports_a_coordinator_error(
     assert len(snapshot.nodes) == 1
     assert snapshot.nodes[0].role == "worker"
     assert snapshot.nodes[0].reachable is True
+
+
+async def test_snapshot_download_field_populated_when_idle(
+    huddle_config: HuddleConfig, api: tuple[Any, httpx.AsyncClient]
+) -> None:
+    _, client = api
+    poller = ClusterPoller(huddle_config, client=client)
+
+    snapshot = await poller.poll()
+
+    assert snapshot.download is not None
+    assert snapshot.download.active is False
+
+
+async def test_search_models_via_the_poller(
+    huddle_config: HuddleConfig, api: tuple[Any, httpx.AsyncClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_results = [hfhub.HFModelSummary(repo_id="someone/repo", gguf_files=["model.gguf"])]
+    monkeypatch.setattr(hfhub, "search_models", lambda q, **kw: fake_results)
+
+    _, client = api
+    poller = ClusterPoller(huddle_config, client=client)
+
+    results = await poller.search_models("qwen")
+
+    assert results == fake_results
+
+
+async def test_repo_files_via_the_poller(
+    huddle_config: HuddleConfig, api: tuple[Any, httpx.AsyncClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = hfhub.HFRepoFiles(
+        repo_id="someone/repo", files=[hfhub.HFFile(filename="model.gguf", size=42)]
+    )
+    monkeypatch.setattr(hfhub, "repo_files", lambda repo_id: fake)
+
+    _, client = api
+    poller = ClusterPoller(huddle_config, client=client)
+
+    files = await poller.repo_files("someone/repo")
+
+    assert files == fake.files
+
+
+async def test_download_model_via_the_poller(
+    huddle_config: HuddleConfig, api: tuple[Any, httpx.AsyncClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        hfhub, "preflight", lambda repo_id, filename: type("_", (), {"file_size": None})()
+    )
+    monkeypatch.setattr(
+        hfhub, "download", lambda repo_id, filename, *, local_dir, on_progress: local_dir / filename
+    )
+
+    _, client = api
+    poller = ClusterPoller(huddle_config, client=client)
+
+    status = await poller.download_model("someone/repo", "model.gguf")
+
+    assert status.repo_id == "someone/repo"
+    assert status.filename == "model.gguf"

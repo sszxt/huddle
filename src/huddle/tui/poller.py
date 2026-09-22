@@ -14,9 +14,11 @@ from typing import Literal
 
 import httpx
 
+from huddle import hfhub
 from huddle.agent.service import BackendStatus, RpcStatus
 from huddle.config import HuddleConfig
 from huddle.coordinator.cluster import PeerReport, query_peers
+from huddle.coordinator.downloads import DownloadStatus
 from huddle.coordinator.service import ClusterStatus
 from huddle.doctor import api_base_url
 from huddle.hardware import NodeHardware
@@ -52,6 +54,7 @@ class ClusterSnapshot:
     # so the dashboard can say so instead of showing an empty cluster.
     coordinator_error: str | None = None
     log_lines: list[str] = field(default_factory=list)
+    download: DownloadStatus | None = None
 
 
 class ClusterPoller:
@@ -123,6 +126,7 @@ class ClusterPoller:
             available_models=available_models,
             loaded_model=loaded_model,
             log_lines=await self._fetch_logs(client, base),
+            download=await self._fetch_download_status(client, base),
         )
 
     async def _local_only_snapshot(self, client: httpx.AsyncClient, base: str) -> ClusterSnapshot:
@@ -249,6 +253,16 @@ class ClusterPoller:
         lines: list[str] = response.json().get("lines", [])
         return lines
 
+    async def _fetch_download_status(
+        self, client: httpx.AsyncClient, base: str
+    ) -> DownloadStatus | None:
+        try:
+            response = await client.get(f"{base}/cluster/models/download", timeout=10.0)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        return DownloadStatus.model_validate(response.json())
+
     # -- controls: thin wrappers over the existing /cluster/* endpoints ----
 
     async def start_cluster(self, model: str | None = None) -> ClusterStatus:
@@ -272,6 +286,36 @@ class ClusterPoller:
         response = await client.post(f"{base}/cluster/model", json={"model": model}, timeout=900.0)
         response.raise_for_status()
         return ClusterStatus.model_validate(response.json())
+
+    async def search_models(self, query: str) -> list[hfhub.HFModelSummary]:
+        client = await self._get_client()
+        base = api_base_url(self.config)
+        response = await client.get(
+            f"{base}/cluster/models/search", params={"q": query}, timeout=30.0
+        )
+        response.raise_for_status()
+        return [hfhub.HFModelSummary(**r) for r in response.json()["results"]]
+
+    async def repo_files(self, repo_id: str) -> list[hfhub.HFFile]:
+        client = await self._get_client()
+        base = api_base_url(self.config)
+        response = await client.get(
+            f"{base}/cluster/models/repo-files", params={"repo_id": repo_id}, timeout=30.0
+        )
+        response.raise_for_status()
+        return [hfhub.HFFile(**f) for f in response.json()["files"]]
+
+    async def download_model(self, repo_id: str, filename: str) -> DownloadStatus:
+        """Fire-and-forget: the server does not await the download itself."""
+        client = await self._get_client()
+        base = api_base_url(self.config)
+        response = await client.post(
+            f"{base}/cluster/models/download",
+            json={"repo_id": repo_id, "filename": filename},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return DownloadStatus.model_validate(response.json())
 
 
 def _layers_for(cluster: ClusterStatus, node_name: str) -> int:

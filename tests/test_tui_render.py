@@ -6,12 +6,14 @@ from rich.console import Console
 
 from huddle.agent.service import BackendStatus
 from huddle.config import HuddleConfig
+from huddle.coordinator.downloads import DownloadStatus
 from huddle.coordinator.service import ClusterStatus
 from huddle.hardware import DeviceInfo, NodeHardware
 from huddle.tui.poller import ClusterSnapshot, NodeSnapshot
 from huddle.tui.render import (
     banner,
     cluster_state,
+    download_panel,
     frame,
     meter,
     node_panel,
@@ -164,3 +166,51 @@ def test_frame_includes_tokens_per_sec_from_head_backend() -> None:
 def test_frame_before_any_poll_shows_connecting() -> None:
     text = render_to_text(frame(None, _config()))
     assert "connecting" in text
+
+
+def test_download_panel_none_when_never_run() -> None:
+    assert download_panel(None) is None
+    assert download_panel(DownloadStatus(active=False)) is None
+
+
+def test_download_panel_shows_progress_meter() -> None:
+    status = DownloadStatus(
+        active=True, repo_id="someone/repo", filename="model.gguf", bytes_done=50, total_bytes=100
+    )
+    panel = download_panel(status)
+    assert panel is not None
+    text = render_to_text(panel)
+    assert "someone/repo/model.gguf" in text
+    assert "50%" in text
+
+
+def test_download_panel_shows_error() -> None:
+    status = DownloadStatus(
+        active=False, repo_id="someone/repo", filename="model.gguf", error="boom"
+    )
+    panel = download_panel(status)
+    assert panel is not None
+    text = render_to_text(panel)
+    assert "failed: boom" in text
+
+
+def test_download_panel_shows_done() -> None:
+    status = DownloadStatus(active=False, repo_id="someone/repo", filename="model.gguf", done=True)
+    panel = download_panel(status)
+    assert panel is not None
+    text = render_to_text(panel)
+    assert "done" in text
+
+
+def test_frame_includes_download_panel_when_active() -> None:
+    config = _config()
+    snapshot = ClusterSnapshot(
+        fetched_at=0.0,
+        cluster=ClusterStatus(running=True, head_node="omarchy"),
+        nodes=[_reachable_node()],
+        download=DownloadStatus(
+            active=True, repo_id="someone/repo", filename="model.gguf", bytes_done=1, total_bytes=2
+        ),
+    )
+    text = render_to_text(frame(snapshot, config))
+    assert "someone/repo/model.gguf" in text

@@ -105,6 +105,8 @@ class HuddleTUI:
                     await self._stop_cluster_confirmed()
                 elif key == "m":
                     await self._switch_model_prompt()
+                elif key == "d":
+                    await self._download_model_prompt()
                 elif key == "r":
                     await self._refresh()
         finally:
@@ -194,6 +196,73 @@ class HuddleTUI:
             self._redraw()
         else:
             await self._refresh()
+
+    async def _download_model_prompt(self) -> None:
+        """The interactive 'd' path: search, pick a repo, pick a file, fire.
+
+        Three short prompts in sequence, each pausing/resuming Live the same
+        way `_switch_model_prompt` does. Does not wait for the download
+        itself — the already-running poll loop picks up `DownloadStatus` on
+        its next tick, same as every other piece of live state here.
+        """
+        with self._paused_for_input():
+            query = input("Search Hugging Face: ").strip()
+        if not query:
+            return
+        try:
+            results = await self.poller.search_models(query)
+        except httpx.HTTPError as exc:
+            self.message = f"search failed: {exc}"
+            self._redraw()
+            return
+        if not results:
+            self.message = f"no GGUF repos matching {query!r}"
+            self._redraw()
+            return
+
+        with self._paused_for_input():
+            print("Repos:")
+            for i, result in enumerate(results, 1):
+                print(f"  {i}. {result.repo_id}  ({len(result.gguf_files)} gguf file(s))")
+            choice = input("Pick a repo # (blank to cancel): ").strip()
+        if not choice:
+            return
+        try:
+            repo = results[int(choice) - 1]
+        except (ValueError, IndexError):
+            self.message = f"invalid choice: {choice!r}"
+            self._redraw()
+            return
+
+        try:
+            files = await self.poller.repo_files(repo.repo_id)
+        except httpx.HTTPError as exc:
+            self.message = f"could not list files: {exc}"
+            self._redraw()
+            return
+
+        with self._paused_for_input():
+            print(f"Files in {repo.repo_id}:")
+            for i, hf_file in enumerate(files, 1):
+                size = f"{hf_file.size / 1024**3:.1f} GiB" if hf_file.size else "size unknown"
+                print(f"  {i}. {hf_file.filename}  ({size})")
+            choice = input("Download # (blank to cancel): ").strip()
+        if not choice:
+            return
+        try:
+            picked = files[int(choice) - 1]
+        except (ValueError, IndexError):
+            self.message = f"invalid choice: {choice!r}"
+            self._redraw()
+            return
+
+        try:
+            await self.poller.download_model(repo.repo_id, picked.filename)
+        except httpx.HTTPStatusError as exc:
+            self.message = f"download failed: {_detail(exc)}"
+        except httpx.HTTPError as exc:
+            self.message = f"download failed: {exc}"
+        self._redraw()
 
 
 def run_tui(config: HuddleConfig, *, poll_interval: float | None = None) -> None:

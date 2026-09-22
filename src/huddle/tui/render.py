@@ -22,6 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 from huddle.config import HuddleConfig
+from huddle.coordinator.downloads import DownloadStatus
 from huddle.doctor import api_base_url
 from huddle.tui.poller import ClusterSnapshot, NodeSnapshot
 
@@ -182,6 +183,22 @@ def banner(snapshot: ClusterSnapshot | None, config: HuddleConfig) -> Panel:
     return Panel(text, border_style="green")
 
 
+def download_panel(download: DownloadStatus | None) -> Panel | None:
+    """`None` when there is nothing to show — no download has ever run."""
+    if download is None or not (download.active or download.done or download.error):
+        return None
+    fraction = download.bytes_done / download.total_bytes if download.total_bytes else None
+    body = Table.grid(padding=(0, 1))
+    body.add_column()
+    body.add_row(Text(f"{download.repo_id}/{download.filename}"))
+    body.add_row(meter(fraction))
+    if download.error:
+        body.add_row(Text(f"failed: {download.error}", style="red"))
+    elif download.done:
+        body.add_row(Text("done", style="green"))
+    return Panel(body, title="download", border_style="red" if download.error else "green")
+
+
 def log_panel(lines: list[str], *, height: int = _LOG_LINES) -> Panel:
     tail = lines[-height:]
     content = Text("\n".join(tail) if tail else "(no output yet)", style="grey70", no_wrap=True)
@@ -189,7 +206,9 @@ def log_panel(lines: list[str], *, height: int = _LOG_LINES) -> Panel:
 
 
 def footer(message: str | None = None) -> Text:
-    base = Text("s Start   x Stop   m Switch model   r Refresh   q Quit", style="grey50")
+    base = Text(
+        "s Start   x Stop   m Switch model   d Download   r Refresh   q Quit", style="grey50"
+    )
     if message:
         base.append("   |   ")
         base.append(message, style="yellow3")
@@ -209,6 +228,9 @@ def frame(
     parts: list[RenderableType] = [banner(snapshot, config)]
     if snapshot is not None:
         parts += [node_row(snapshot), pipeline_line(snapshot), status_row(snapshot)]
+        panel = download_panel(snapshot.download)
+        if panel is not None:
+            parts.append(panel)
         parts.append(log_panel(snapshot.log_lines))
     else:
         parts.append(Text("connecting ...", style="grey50"))
@@ -220,6 +242,7 @@ __all__ = [
     "banner",
     "cluster_panel",
     "cluster_state",
+    "download_panel",
     "footer",
     "frame",
     "launch_panel",
