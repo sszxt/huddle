@@ -13,6 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from huddle.agent.app import build_router as build_agent_router
 from huddle.agent.service import BackendService
@@ -20,8 +21,10 @@ from huddle.api.app import build_router as build_api_router
 from huddle.api.app import make_client
 from huddle.config import HuddleConfig
 from huddle.coordinator.app import build_router as build_cluster_router
+from huddle.coordinator.downloads import DownloadService
 from huddle.coordinator.service import ClusterService
 from huddle.discovery import ROLE_COORDINATOR, Advertiser
+from huddle.web import STATIC_DIR
 
 log = logging.getLogger("huddle")
 
@@ -29,6 +32,7 @@ log = logging.getLogger("huddle")
 def create_app(config: HuddleConfig) -> FastAPI:
     service = BackendService(config)
     cluster = ClusterService(config, service)
+    downloads = DownloadService(config.models.dir)
     client = make_client()
     advertiser = Advertiser(config, role=ROLE_COORDINATOR)
 
@@ -59,14 +63,16 @@ def create_app(config: HuddleConfig) -> FastAPI:
             await advertiser.stop()
             await cluster.stop()
             await service.stop_rpc()
+            await downloads.cancel()
             await client.aclose()
 
     app = FastAPI(title="Huddle", version="0.1.0", lifespan=lifespan)
     app.state.service = service
     app.state.cluster = cluster
     app.include_router(build_agent_router(service))
-    app.include_router(build_cluster_router(cluster))
+    app.include_router(build_cluster_router(cluster, downloads))
     app.include_router(build_api_router(service, client, cluster))
+    app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="web-ui")
     return app
 
 

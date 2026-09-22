@@ -2,19 +2,51 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from huddle import hfhub
+from huddle.coordinator.downloads import AlreadyDownloading, DownloadService, DownloadStatus
 from huddle.coordinator.service import ClusterPlan, ClusterService, ClusterStatus
 from huddle.gguf import GGUFError
 from huddle.process import ProcessError
+
+# A 5% margin over the file's reported size before refusing a download for
+# lack of disk space — the reported size is the LFS pointer's target size,
+# not necessarily byte-exact once written.
+_DISK_MARGIN = 1.05
 
 
 class StartRequest(BaseModel):
     model: str | None = None
 
 
-def build_router(service: ClusterService) -> APIRouter:
+class SearchResponse(BaseModel):
+    results: list[hfhub.HFModelSummary]
+
+
+class RepoFilesResponse(BaseModel):
+    repo_id: str
+    files: list[hfhub.HFFile]
+
+
+class DownloadRequest(BaseModel):
+    repo_id: str
+    filename: str
+
+
+def build_router(service: ClusterService, downloads: DownloadService) -> APIRouter:
+    """Cluster control, plus model search/download.
+
+    Like every other route here, `/models/search` and `/models/download`
+    have no authentication of their own — same posture as `/cluster/start`.
+    Anyone who can reach this port can already start/stop the cluster; being
+    able to also trigger a Hugging Face download is not a bigger exposure,
+    just flagging it rather than leaving it implicit.
+    """
     router = APIRouter(prefix="/cluster", tags=["cluster"])
 
     @router.get("")
@@ -54,5 +86,47 @@ def build_router(service: ClusterService) -> APIRouter:
     @router.post("/stop")
     async def stop() -> ClusterStatus:
         return await service.stop()
+
+    @router.get("/models/search")
+    async def search_models(q: str) -> SearchResponse:
+        if not q.strip():
+            raise HTTPException(status_code=422, detail="q is required")
+        try:
+            results = await downloads.search(q)
+        except hfhub.HFError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return SearchResponse(results=results)
+
+    @router.get("/models/repo-files")
+    async def repo_files(repo_id: str) -> RepoFilesResponse:
+        try:
+            result = await downloads.repo_files(repo_id)
+        except hfhub.HFError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RepoFilesResponse(repo_id=result.repo_id, files=result.files)
+
+    @router.get("/models/download")
+    async def download_status() -> DownloadStatus:
+        return downloads.status()
+
+    @router.post("/models/download")
+    async def start_download(request: DownloadRequest) -> DownloadStatus:
+        try:
+            info = await asyncio.to_thread(hfhub.preflight, request.repo_id, request.filename)
+        except hfhub.HFError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if info.file_size is not None:
+            free = shutil.disk_usage(service.config.models.dir).free
+            needed = int(info.file_size * _DISK_MARGIN)
+            if free < needed:
+                raise HTTPException(
+                    status_code=507,
+                    detail=f"not enough disk space: need ~{needed} bytes, {free} free",
+                )
+        try:
+            downloads.start(request.repo_id, request.filename)
+        except AlreadyDownloading as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return downloads.status()
 
     return router
