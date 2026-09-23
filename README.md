@@ -16,19 +16,30 @@ starts and supervises the processes, and puts an OpenAI-compatible API in front.
 
 ## Status
 
-Two-node cluster (two RTX 5070s, one Arch and one Ubuntu node): a 32B Q4_K_M
-model that fits on neither GPU alone serves at 27.7 tok/s generation, fully
-offloaded and split across both.
+Two-node cluster, both nodes running Ubuntu (two RTX 5070s): a 32B Q4_K_M
+model that fits on neither GPU alone serves fully offloaded and split across
+both. Previously benchmarked at 27.7 tok/s generation at full 64/64 layer
+offload; the head node has since had its OS reinstalled, and `huddle doctor`
+confirms the rebuilt cluster is back up and placing layers correctly
+(63/64 offloaded at last check, the remainder depending on free VRAM at
+load time). The two nodes were originally different distros (Arch and
+Ubuntu); after the reinstall both run Ubuntu, so that cross-distro case is
+no longer exercised here.
 
 - **v0** — single node behind an OpenAI-compatible API
 - **v1** — multi-node layer split, supervision and restart, model switching,
   systemd units
 - **v2** — peer discovery over mDNS
 - **v3** — capacity-aware placement (out-of-memory replanning, peer rejoin)
-  plus `huddle tui`, a terminal dashboard for watching and controlling the
-  cluster, with best-effort GPU utilization/temperature/power and generation
-  speed. The dashboard and its metrics are demoed and unit-tested against fake
-  binaries; not yet confirmed against a live cluster.
+  plus `huddle tui`, a terminal dashboard built with `rich` (modeled on exo's
+  own topology view) for watching and controlling the cluster, with GPU
+  utilization/temperature/power and generation speed. Demoed against a live
+  cluster on real hardware, including real GPU metrics and measured tok/s.
+- **Model downloads** — search Hugging Face and pull a GGUF straight to a
+  node's model directory, no manual `scp`/`hf download` required. Available
+  both from `huddle tui` and from a small model-manager web page served at
+  `/ui`. Unit-tested against fakes and demoed manually; not yet exercised
+  end-to-end against the real Hugging Face Hub through either UI.
 
 More nodes add capacity, not speed: pipeline parallelism runs one stage at a
 time, and every node boundary costs a network round trip per token.
@@ -45,8 +56,8 @@ uv sync
 cp huddle.example.yaml huddle.yaml   # point it at your llama.cpp build and models
 uv run huddle doctor                 # checks the node, peers and live cluster
 uv run huddle plan                   # shows how layers would be split
-uv run huddle serve                  # agent + OpenAI-compatible API
-uv run huddle tui                    # terminal dashboard: monitor and control it
+uv run huddle serve                  # agent + OpenAI-compatible API + model manager at /ui
+uv run huddle tui                    # terminal dashboard: monitor, control, download models
 ```
 
 On worker nodes, `uv run huddle agent` runs the agent alone.
@@ -61,9 +72,12 @@ separately from desktop applications.
 
 The llama.cpp RPC backend has no authentication and no encryption, and upstream
 states it must never run on an open network. Bind `rpc-server` to a private LAN
-or WireGuard interface and firewall the port. Running the cluster over Tailscale
-covers both. The node agent's control API has no authentication either; keep
-it off public interfaces.
+or VPN interface and firewall the port so only cluster nodes can reach it — a
+host firewall like `ufw` allowing the RPC port from peer addresses only is
+enough on a trusted LAN; a WireGuard/Tailscale overlay adds encryption on top
+if the network isn't otherwise trusted. The node agent's control API and the
+model-manager web UI (`/ui`) have no authentication either; keep all of it off
+public interfaces.
 
 ## Tests
 
