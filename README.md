@@ -37,9 +37,14 @@ no longer exercised here.
   cluster on real hardware, including real GPU metrics and measured tok/s.
 - **Model downloads** — search Hugging Face and pull a GGUF straight to a
   node's model directory, no manual `scp`/`hf download` required. Available
-  both from `huddle tui` and from a small model-manager web page served at
-  `/ui`. Unit-tested against fakes and demoed manually; not yet exercised
-  end-to-end against the real Hugging Face Hub through either UI.
+  both from `huddle tui` and from the web UI's Workspace page. Unit-tested
+  against fakes and demoed manually; not yet exercised end-to-end against the
+  real Hugging Face Hub through either UI.
+- **Web UI** — a chat front end at `/ui`, laid out after Open WebUI's chat
+  screen: streaming chat against the cluster's OpenAI-compatible API, model
+  switching, chat history kept in the browser, and the model manager under
+  Workspace. Plain HTML, CSS and JS, no build step. Checked in a browser
+  against the fake binaries only; not yet run against a live cluster.
 
 More nodes add capacity, not speed: pipeline parallelism runs one stage at a
 time, and every node boundary costs a network round trip per token.
@@ -56,7 +61,7 @@ uv sync
 cp huddle.example.yaml huddle.yaml   # point it at your llama.cpp build and models
 uv run huddle doctor                 # checks the node, peers and live cluster
 uv run huddle plan                   # shows how layers would be split
-uv run huddle serve                  # agent + OpenAI-compatible API + model manager at /ui
+uv run huddle serve                  # agent + OpenAI-compatible API + web UI at /ui
 uv run huddle tui                    # terminal dashboard: monitor, control, download models
 ```
 
@@ -76,8 +81,10 @@ or VPN interface and firewall the port so only cluster nodes can reach it — a
 host firewall like `ufw` allowing the RPC port from peer addresses only is
 enough on a trusted LAN; a WireGuard/Tailscale overlay adds encryption on top
 if the network isn't otherwise trusted. The node agent's control API and the
-model-manager web UI (`/ui`) have no authentication either; keep all of it off
-public interfaces.
+web UI (`/ui`, which drives the `/cluster/*` routes to switch and download
+models) have no authentication either; keep all of it off public interfaces.
+Only chat requests (`/v1/*`) check `api.api_key`, and the web UI asks for the
+key when one is set.
 
 ## Tests
 
