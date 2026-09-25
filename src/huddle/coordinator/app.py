@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from huddle import hfhub
 from huddle.coordinator.downloads import AlreadyDownloading, DownloadService, DownloadStatus
+from huddle.coordinator.overview import ClusterOverview, OverviewService
 from huddle.coordinator.service import ClusterPlan, ClusterService, ClusterStatus
 from huddle.gguf import GGUFError
 from huddle.process import ProcessError
@@ -48,10 +49,16 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
     just flagging it rather than leaving it implicit.
     """
     router = APIRouter(prefix="/cluster", tags=["cluster"])
+    overview = OverviewService(service)
 
     @router.get("")
     async def status() -> ClusterStatus:
         return service.status()
+
+    @router.get("/nodes")
+    async def nodes() -> ClusterOverview:
+        """Every node's hardware, system details and role, for the cluster page."""
+        return await overview.overview()
 
     @router.get("/plan")
     async def plan(model: str | None = None, ctx: int | None = None) -> ClusterPlan:

@@ -134,6 +134,17 @@ class ClusterService:
         # so a single slow answer does not restart a healthy cluster.
         self._worker_strikes = 0
 
+    @property
+    def known_peers(self) -> list[PeerConfig]:
+        """Configured peers, then any discovered ones the last plan saw.
+
+        For showing the cluster, not planning it: no discovery browse happens
+        here, because a browse takes seconds and this is read on every refresh.
+        """
+        peers = list(self.config.peers)
+        names = {peer.name for peer in peers}
+        return peers + [peer for peer in self._resolved_peers if peer.name not in names]
+
     def status(self) -> ClusterStatus:
         return ClusterStatus(
             running=self.backend.running,
