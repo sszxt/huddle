@@ -29,8 +29,10 @@
 
   /* Tailwind v4 default colors that the components use. */
   --red-400: oklch(70.4% 0.191 22.216);
+  --red-500: oklch(63.7% 0.237 25.331);
   --red-600: oklch(57.7% 0.245 27.325);
   --green-500: oklch(72.3% 0.219 149.579);
+  --amber-500: oklch(76.9% 0.188 70.08);
 
   /* @tailwindcss/typography, prose-invert, built on Tailwind's default grays. */
   --prose-body: oklch(87.2% 0.01 258.338);
@@ -3435,6 +3437,639 @@ input[type="checkbox"]:checked {
 
 .ws-download-line.error {
   color: var(--red-400);
+}
+
+/* --- Cluster page -------------------------------------------------------------
+   Open WebUI has no cluster page; this follows its system instead: the
+   Workspace header and padding, model-card borders (rounded-2xl
+   border-gray-850), text-xs/text-sm type, neutral fills, Heroicons outlines. */
+
+.cv-live {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+  white-space: nowrap;
+}
+
+.cv-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--gray-600);
+}
+
+.cv-live-ok {
+  background: var(--green-500);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.cv-live-bad {
+  background: var(--red-500);
+}
+
+.cv-loading {
+  padding: 24px 2px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--gray-500);
+}
+
+.cv-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cv-mono,
+.cv-ip {
+  font-family: var(--font-mono);
+}
+
+.cv-dim {
+  color: var(--gray-500);
+}
+
+.cv-small {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.cv-bad {
+  color: var(--red-400);
+}
+
+/* Title row: ws-title plus a state pill */
+.cv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 12px;
+}
+
+.cv-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: var(--gray-850);
+  color: var(--gray-300);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cv-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--gray-500);
+}
+
+.cv-state-running .cv-state-dot {
+  background: var(--green-500);
+}
+
+.cv-state-starting .cv-state-dot {
+  background: var(--amber-500);
+  animation: pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.cv-state-degraded {
+  color: var(--red-400);
+}
+
+.cv-state-degraded .cv-state-dot {
+  background: var(--red-500);
+}
+
+/* Stat tiles */
+.cv-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.cv-stat {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--gray-850);
+  border-radius: 16px;
+}
+
+.cv-stat-label {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+.cv-stat-value {
+  display: flex;
+  margin-top: 2px;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 500;
+  color: var(--gray-100);
+  min-width: 0;
+}
+
+/* Tabular figures only where numbers change in place; on names they space out
+   hyphens and underscores. */
+.cv-stat-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.cv-stat-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+.cv-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.cv-alerts .msg-error {
+  margin: 0;
+}
+
+.cv-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--gray-850);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-400);
+}
+
+.cv-note .icon {
+  margin-top: 0;
+}
+
+/* Topology: the head, a gap the links cross, then the peers */
+.cv-topology {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 400px) 140px minmax(0, 400px);
+  justify-content: center;
+  align-items: center;
+  margin: 24px 0;
+}
+
+.cv-topology.cv-single {
+  grid-template-columns: minmax(0, 420px);
+}
+
+.cv-topology.cv-stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.cv-topology.cv-stacked .cv-gap {
+  display: none;
+}
+
+.cv-head-col,
+.cv-peer-col {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.cv-peer-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cv-links,
+.cv-link-labels {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 0;
+}
+
+.cv-link {
+  fill: none;
+  stroke: var(--gray-700);
+  stroke-width: 1.5;
+}
+
+.cv-link-worker {
+  stroke: var(--gray-500);
+}
+
+/* Carrying layers while serving: a slow flow along the line */
+.cv-link-live {
+  stroke: var(--gray-400);
+  stroke-dasharray: 6 6;
+  animation: cv-flow 1.2s linear infinite;
+}
+
+.cv-link-idle {
+  stroke-dasharray: 4 5;
+}
+
+.cv-link-offline {
+  stroke: var(--red-400);
+  stroke-dasharray: 4 5;
+  opacity: 0.5;
+}
+
+@keyframes cv-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.cv-link-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-850);
+  background: var(--gray-900);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--gray-400);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.cv-link-label-bad {
+  color: var(--red-400);
+}
+
+/* Node cards: model-card border and padding (Models.svelte) */
+.cv-node {
+  position: relative;
+  padding: 16px;
+  border: 1px solid var(--gray-850);
+  border-radius: 16px;
+  background: var(--gray-900);
+  min-width: 0;
+}
+
+.cv-node-offline {
+  opacity: 0.65;
+}
+
+.cv-node-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cv-node-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  color: var(--gray-300);
+}
+
+.cv-computer {
+  width: 36px;
+  height: 36px;
+}
+
+.cv-node-dot {
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  border: 2px solid var(--gray-900);
+  background: var(--gray-500);
+}
+
+.cv-dot-head,
+.cv-dot-worker {
+  background: var(--green-500);
+}
+
+.cv-dot-offline {
+  background: var(--red-500);
+}
+
+.cv-node-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.cv-node-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: #fff;
+  min-width: 0;
+}
+
+.cv-role {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: var(--gray-850);
+  color: var(--gray-300);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+}
+
+/* The head gets Open WebUI's inverted "primary" treatment */
+.cv-role-head {
+  background: var(--gray-100);
+  color: var(--gray-900);
+}
+
+.cv-role-idle {
+  color: var(--gray-400);
+}
+
+.cv-role-offline {
+  background: color-mix(in oklab, var(--red-600) 10%, transparent);
+  color: var(--red-400);
+}
+
+.cv-node-sub {
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-addresses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.cv-addr {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  min-width: 0;
+}
+
+.cv-if {
+  min-width: 64px;
+  color: var(--gray-500);
+}
+
+.cv-ip {
+  color: var(--gray-200);
+}
+
+.cv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gray-850);
+}
+
+.cv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  min-width: 0;
+}
+
+.cv-row-end {
+  justify-content: flex-end;
+}
+
+.cv-label {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--gray-400);
+}
+
+.cv-value {
+  color: var(--gray-200);
+}
+
+.cv-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Meters: 4px, rounded-full, neutral fill */
+.cv-meter {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--gray-850);
+  overflow: hidden;
+}
+
+.cv-meter-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--gray-300);
+  transition: width 400ms var(--ease);
+}
+
+.cv-gpu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cv-gpu + .cv-gpu {
+  margin-top: 8px;
+}
+
+.cv-gpu-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--gray-100);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cv-gpu-stats {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-400);
+  font-variant-numeric: tabular-nums;
+}
+
+.cv-chip {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: var(--gray-850);
+  color: var(--gray-300);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+}
+
+.cv-chip-muted {
+  color: var(--gray-500);
+}
+
+.cv-node-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gray-850);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+.cv-sep {
+  color: var(--gray-700);
+}
+
+.cv-bad-note {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--red-400);
+}
+
+.cv-node .cv-small {
+  margin-top: 10px;
+}
+
+.cv-offline-reason {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgb(38 38 38 / 0.6);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-400);
+  word-break: break-word;
+}
+
+/* Layer placement */
+.cv-panel {
+  margin: 0 0 24px;
+  padding: 14px 16px;
+  border: 1px solid var(--gray-850);
+  border-radius: 16px;
+}
+
+.cv-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cv-panel-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--gray-100);
+}
+
+.cv-bar {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--gray-850);
+}
+
+.cv-seg {
+  display: flex;
+  align-items: center;
+  min-width: 6px;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--gray-100);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cv-seg span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cv-seg-dark {
+  color: var(--gray-900);
+}
+
+.cv-seg-cpu {
+  background: repeating-linear-gradient(135deg, var(--gray-800) 0 6px, var(--gray-850) 6px 12px);
+  color: var(--gray-300);
+}
+
+.cv-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 10px;
+}
+
+.cv-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.cv-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.cv-legend-name {
+  color: var(--gray-200);
 }
 
 /* --- Phones (Open WebUI's $mobile: under 768px) ---------------------------- */

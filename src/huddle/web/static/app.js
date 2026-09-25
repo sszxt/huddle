@@ -14,6 +14,7 @@ import {
   updateHomeHeading,
 } from "./chat.js";
 import { startPolling } from "./cluster.js";
+import { closeClusterPage, initClusterPage, openClusterPage, renderClusterPage } from "./clusterview.js";
 import { bindNavbar } from "./navbar.js";
 import { initSidebar, renderSidebar } from "./sidebar.js";
 import { isMobile, on, state } from "./store.js";
@@ -25,13 +26,17 @@ function parseRoute() {
   const chat = path.match(/^\/c\/([^/?#]+)/);
   if (chat) return { name: "chat", id: decodeURIComponent(chat[1]) };
   if (path.startsWith("/workspace")) return { name: "workspace" };
+  if (path.startsWith("/cluster")) return { name: "cluster" };
   return { name: "home" };
 }
 
+// Pages that replace the chat view, and how to redraw each in place.
+const PAGES = { workspace: renderWorkspace, cluster: renderClusterPage };
+
 /** Open WebUI's page title: the chat title (cut at 30 characters) • name. */
 function updateTitle() {
-  if (state.route.name === "workspace") {
-    document.title = "Workspace • Huddle";
+  if (state.route.name === "workspace" || state.route.name === "cluster") {
+    document.title = `${state.route.name === "workspace" ? "Workspace" : "Cluster"} • Huddle`;
     return;
   }
   const title = state.current && !state.current.temporary ? state.current.title : "";
@@ -42,16 +47,19 @@ function route() {
   const next = parseRoute();
   const previous = state.route.name;
   state.route = next;
+  if (next.name !== "cluster") closeClusterPage();
 
   if (next.name === "workspace") {
     renderWorkspace();
+  } else if (next.name === "cluster") {
+    openClusterPage();
   } else if (next.name === "chat") {
     const chat = state.chats.find((c) => c.id === next.id);
     if (!chat) {
       state.route = { name: "home" };
       newChat();
       renderChatView();
-    } else if (chat !== state.current || previous === "workspace") {
+    } else if (chat !== state.current || previous in PAGES) {
       state.current = chat;
       state.prompt = "";
       renderChatView();
@@ -67,6 +75,7 @@ function route() {
 function showNewChat() {
   newChat();
   state.route = { name: "home" };
+  closeClusterPage();
   renderChatView();
   renderSidebar();
   updateTitle();
@@ -77,6 +86,7 @@ function init() {
   initSidebar();
   initChat();
   initWorkspace();
+  initClusterPage();
   bindNavbar(document.getElementById("chat-container"));
 
   on("new-chat", showNewChat);
@@ -91,19 +101,19 @@ function init() {
   });
   on("sidebar", () => {
     renderSidebar();
-    if (state.route.name === "workspace") renderWorkspace();
+    if (state.route.name in PAGES) PAGES[state.route.name]();
     else renderNavbar();
   });
   on("models", () => {
     if (state.route.name === "workspace") renderWorkspace();
-    else {
+    else if (!(state.route.name in PAGES)) {
       renderNavbar();
       updateHomeHeading();
     }
   });
   on("node", () => {
     renderSidebar();
-    if (state.route.name !== "workspace") {
+    if (!(state.route.name in PAGES)) {
       renderNavbar();
       updateHomeHeading();
     }
@@ -116,7 +126,7 @@ function init() {
     wasMobile = isMobile();
     if (wasMobile) state.showSidebar = false;
     renderSidebar();
-    if (state.route.name === "workspace") renderWorkspace();
+    if (state.route.name in PAGES) PAGES[state.route.name]();
     else {
       renderNavbar();
       renderControls();

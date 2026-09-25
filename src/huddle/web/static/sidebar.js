@@ -22,6 +22,7 @@ const NAV_ITEMS = [
   { action: "new-chat", href: "#/", label: "New Chat", icon: () => icon("pencilSquare", "size-4.5", 2) },
   { action: "search", label: "Search", icon: () => icon("search", "size-4.5", 2) },
   { action: "workspace", href: "#/workspace", label: "Workspace", icon: () => icon("workspace", "size-4.5", 2) },
+  { action: "cluster", href: "#/cluster", label: "Cluster", icon: () => icon("serverStack", "size-4.5", 2) },
 ];
 
 function chatItem(chat) {
@@ -101,6 +102,7 @@ function railHtml() {
     cell(icon("pencilSquare", "size-4.5"), 'href="#/" data-action="new-chat"', "New Chat") +
     cell(icon("search", "size-4.5"), 'href="#" data-action="search"', "Search") +
     cell(icon("workspace", "size-4.5"), 'href="#/workspace" data-action="workspace"', "Workspace") +
+    cell(icon("serverStack", "size-4.5"), 'href="#/cluster" data-action="cluster"', "Cluster") +
     `</div></div>` +
     `<div><div class="rail-user"><div class="rail-button"><div class="rail-cell">` +
     `<img src="${initialsImage(state.node || "Huddle")}" class="rail-avatar" alt=""></div></div></div></div>`
@@ -194,7 +196,7 @@ function onSidebarClick(event) {
     event.preventDefault();
     event.stopPropagation();
     openSearch();
-  } else if (action === "workspace") {
+  } else if (action === "workspace" || action === "cluster") {
     if (isMobile()) setShowSidebar(false);
   } else if (action === "toggle-chats") {
     state.chatsOpen = !state.chatsOpen;
