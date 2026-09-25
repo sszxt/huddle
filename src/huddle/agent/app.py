@@ -6,6 +6,7 @@ Bind it to localhost or a private interface, never to the open network.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
@@ -17,6 +18,7 @@ from huddle.config import HuddleConfig
 from huddle.discovery import Advertiser
 from huddle.hardware import NodeHardware
 from huddle.process import ProcessError
+from huddle.system import SystemInfo, probe_system
 
 
 class StartRequest(BaseModel):
@@ -42,7 +44,15 @@ def build_router(service: BackendService) -> APIRouter:
 
     @router.get("/hardware")
     async def hardware() -> NodeHardware:
-        return service.hardware()
+        # A fresh probe every time, as placement requires, but in a thread: it
+        # runs llama-server and nvidia-smi, and a dashboard polling it would
+        # otherwise stall every streaming reply on this node for the duration.
+        return await asyncio.to_thread(service.hardware)
+
+    @router.get("/system")
+    async def system() -> SystemInfo:
+        """OS, CPU and network details, for display only."""
+        return await asyncio.to_thread(probe_system)
 
     @router.get("/backend")
     async def backend_status() -> BackendStatus:
