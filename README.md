@@ -43,8 +43,11 @@ no longer exercised here.
 - **Web UI** — a chat front end at `/ui`, laid out after Open WebUI's chat
   screen: streaming chat against the cluster's OpenAI-compatible API, model
   switching, chat history kept in the browser, and the model manager under
-  Workspace. Plain HTML, CSS and JS, no build step. Checked in a browser
-  against the fake binaries only; not yet run against a live cluster.
+  Workspace. A Cluster page maps every node live: addresses, CPU, memory, each
+  GPU's VRAM/utilization/temperature/power, round-trip time from the head, and
+  which layers sit on which device. Plain HTML, CSS and JS, no build step.
+  Checked in a browser against the fake binaries only; not yet run against a
+  live cluster.
 
 More nodes add capacity, not speed: pipeline parallelism runs one stage at a
 time, and every node boundary costs a network round trip per token.
