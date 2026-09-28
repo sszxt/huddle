@@ -310,12 +310,17 @@ function nodeFooter(node, data, headCommit) {
 function nodeHtml(node, data, stacked, headCommit) {
   const system = node.system;
   const hardware = node.hardware;
-  const subParts = [system?.os, formatUptime(system?.uptime_s)].filter(Boolean);
+  const lent = node.role === "worker" && node.lent_to ? `GPU lent to ${node.lent_to}` : null;
+  const subParts = [lent, system?.os, formatUptime(system?.uptime_s)].filter(Boolean);
+  const self =
+    node.id && node.id === data.viewer_id
+      ? `<span class="cv-chip cv-chip-muted" data-tooltip="The PC this page is open on">This PC</span>`
+      : "";
   const head =
     `<div class="cv-node-head"><div class="cv-node-icon">${icon("computerDesktop", "cv-computer", 1.2)}` +
     `<span class="cv-node-dot cv-dot-${node.role}"></span></div>` +
     `<div class="cv-node-title"><div class="cv-node-name"><span class="cv-truncate">${escapeHtml(node.name)}</span>` +
-    `<span class="cv-role cv-role-${node.role}">${ROLE_LABEL[node.role]}</span></div>` +
+    `<span class="cv-role cv-role-${node.role}">${ROLE_LABEL[node.role]}</span>${self}</div>` +
     `<div class="cv-node-sub">${escapeHtml(subParts.join(" · ") || (node.role === "offline" ? "Not responding" : ""))}</div>` +
     `</div></div>`;
 

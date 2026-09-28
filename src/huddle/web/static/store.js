@@ -32,9 +32,15 @@ export const isMobile = () => window.innerWidth < MOBILE_BREAKPOINT;
 export const state = {
   node: "",
   health: null,
+  // Every PC's models: { file, node, node_id, size, local }.
   models: [],
   loaded: null,
+  // A model still loading somewhere in the cluster, and who is serving.
+  loading: null,
+  head: null,
+  headId: null,
   switching: null,
+  switchingOn: null,
   chats: read(CHATS_KEY, []),
   current: null,
   route: { name: "home" },

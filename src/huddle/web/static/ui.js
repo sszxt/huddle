@@ -263,3 +263,10 @@ export function initialsImage(name) {
 }
 
 export const LOGO_URL = "favicon.svg";
+
+/** A byte count as people read it: "19.9 GB", "491 MB". */
+export function formatBytes(n) {
+  if (n === null || n === undefined) return "size unknown";
+  const gib = n / 1024 ** 3;
+  return gib >= 1 ? `${gib.toFixed(1)} GB` : `${(n / 1024 ** 2).toFixed(0)} MB`;
+}

@@ -4100,3 +4100,39 @@ input[type="checkbox"]:checked {
     padding: 16px 24px;
   }
 }
+
+/* text-xs text-gray-500: the PC this model would run on, in the model menu */
+.model-item-node {
+  margin-left: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+/* One line under the heading: text-sm text-gray-400 */
+.ph-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--gray-400);
+}
+
+.ph-status.muted {
+  color: var(--gray-500);
+  font-size: 13px;
+}
+
+.ph-status.error {
+  color: var(--red-400);
+}
+
+.ph-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--amber-500);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

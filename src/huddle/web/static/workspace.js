@@ -5,11 +5,11 @@
 //
 // Everything talks to Huddle's own /cluster/* routes, same origin.
 
-import { refreshModels, switchModel } from "./cluster.js";
+import { isLoaded, refreshModels, switchModel } from "./cluster.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./markdown.js";
 import { displayName, isMobile, setShowSidebar, state } from "./store.js";
-import { api, errorDetail, LOGO_URL } from "./ui.js";
+import { api, errorDetail, formatBytes, LOGO_URL } from "./ui.js";
 
 let pollHandle = null;
 let modelQuery = "";
@@ -22,12 +22,6 @@ let repoLoading = false;
 let repoError = null;
 let download = null;
 let downloadError = null;
-
-function formatBytes(n) {
-  if (n === null || n === undefined) return "size unknown";
-  const gib = n / 1024 ** 3;
-  return gib >= 1 ? `${gib.toFixed(1)} GB` : `${(n / 1024 ** 2).toFixed(0)} MB`;
-}
 
 function card({ title, subtitle, footer, action, attrs = "", dim = false }) {
   return (
@@ -63,27 +57,32 @@ function searchRow(cls, value, placeholder) {
 
 function modelsSection() {
   const q = modelQuery.trim().toLowerCase();
-  const models = state.models.filter((file) => file.toLowerCase().includes(q));
+  const models = state.models.filter((m) => m.file.toLowerCase().includes(q));
   const cards = models
-    .map((file) => {
-      const loaded = file === state.loaded;
-      const loading = file === state.switching;
+    .map((m) => {
+      const loaded = isLoaded(m);
+      const loading = m.file === state.switching || (m.file === state.loading && !loaded);
+      const where = m.node ? `On ${escapeHtml(m.node)}` : "On disk";
       const footer = loading
         ? '<span class="ws-status">Loading…</span>'
         : loaded
           ? '<span class="ws-status"><span class="ws-dot"></span>Loaded</span>'
-          : '<span class="ws-status">On disk</span>';
+          : `<span class="ws-status">${where}</span>`;
+      const size = m.size ? ` · ${formatBytes(m.size)}` : "";
       return card({
-        title: escapeHtml(displayName(file)),
-        subtitle: escapeHtml(file),
+        title: escapeHtml(displayName(m.file)),
+        subtitle: escapeHtml(m.file) + size,
         footer,
-        attrs: `data-action="use-model" data-file="${escapeHtml(file)}" role="button" tabindex="0"`,
+        attrs:
+          `data-action="use-model" data-file="${escapeHtml(m.file)}" ` +
+          `data-node-id="${m.local ? "" : escapeHtml(m.node_id ?? "")}" ` +
+          `data-node="${m.local ? "" : escapeHtml(m.node ?? "")}" role="button" tabindex="0"`,
       });
     })
     .join("");
   const empty =
     state.models.length === 0
-      ? '<div class="ws-empty">No models on disk yet. Download one below.</div>'
+      ? '<div class="ws-empty">No models on any PC yet. Download one below.</div>'
       : models.length === 0
         ? '<div class="ws-empty">No results found</div>'
         : "";
@@ -291,7 +290,7 @@ export function initWorkspace() {
       // loading it, which restarts the cluster.
       const file = target.dataset.file;
       location.hash = "#/";
-      if (file !== state.loaded) switchModel(file);
+      switchModel(file, target.dataset.nodeId || null, target.dataset.node || null);
     } else if (action === "open-repo") {
       showRepoFiles(target.dataset.repo);
     } else if (action === "download") {

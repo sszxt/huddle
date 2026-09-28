@@ -186,16 +186,42 @@ function filterSuggestions() {
 }
 
 function homeTitleHtml() {
-  const model = state.switching ?? state.loaded;
+  const model = state.switching ?? state.loaded ?? state.loading;
   return model
     ? `<span class="ph-title-text">${escapeHtml(displayName(model))}</span>`
     : `Hello, ${escapeHtml(state.node || "there")}`;
 }
 
-/** Keep the home heading in step with the loaded model without a full re-render. */
+/** One line under the heading: what the cluster is doing, when that matters. */
+function homeStatusHtml() {
+  const health = state.health;
+  const serving = state.switching ? state.switchingOn : state.head;
+  const head = serving && serving !== state.node ? ` on ${escapeHtml(serving)}` : "";
+  if (state.switching || state.loading || health?.status === "starting") {
+    return (
+      `<div class="ph-status"><span class="ph-status-dot"></span>` +
+      `Loading${head}. Large models take a few minutes.</div>`
+    );
+  }
+  if (health?.status === "degraded") {
+    return `<div class="ph-status error">${escapeHtml(health.detail || "The model stopped.")}</div>`;
+  }
+  if (health?.status === "unreachable") {
+    return `<div class="ph-status error">Huddle is not answering. Is the service running?</div>`;
+  }
+  if (state.loaded && head) {
+    return `<div class="ph-status muted">Running${head}</div>`;
+  }
+  return "";
+}
+
+/** Keep the home screen in step with the cluster without a full re-render. */
 export function updateHomeHeading() {
   const title = document.querySelector("#chat-content .ph-title");
-  if (title) title.innerHTML = homeTitleHtml();
+  if (!title) return;
+  title.innerHTML = homeTitleHtml();
+  const status = document.querySelector("#chat-content .ph-desc");
+  if (status) status.innerHTML = homeStatusHtml();
 }
 
 function homeHtml() {
@@ -213,7 +239,7 @@ function homeHtml() {
     `<img src="${LOGO_URL}" class="ph-logo" alt="" draggable="false"></button></div></div>` +
     `<div class="ph-title">${title}</div>` +
     `</div>` +
-    `<div class="ph-desc"><div></div></div>` +
+    `<div class="ph-desc">${homeStatusHtml()}</div>` +
     `<div class="ph-input">${messageInputHtml("How can I help you today?")}</div>` +
     `</div></div>` +
     `<div class="ph-suggestions"><div class="ph-suggestions-inner">${suggestionsHtml()}</div></div>` +
@@ -594,7 +620,10 @@ function canSend() {
     return false;
   }
   if (!state.loaded) {
-    toast("Model not selected", "error");
+    toast(
+      state.loading ? "Please wait until the model finishes loading." : "Start a model first",
+      "error"
+    );
     return false;
   }
   if (isGenerating(state.current)) return false;

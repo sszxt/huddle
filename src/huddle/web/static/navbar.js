@@ -4,14 +4,19 @@
 // model" and "Set as default" links are left out: llama.cpp holds one model per
 // process, and the browser cannot change the cluster's startup default.
 
-import { switchModel } from "./cluster.js";
+import { isLoaded, switchModel } from "./cluster.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./markdown.js";
 import { displayName, emit, isMobile, setShowSidebar, state, touchChat } from "./store.js";
 import { closeMenu, initialsImage, LOGO_URL, openMenu } from "./ui.js";
 
 function selectedModel() {
-  return state.switching ?? state.loaded;
+  return state.switching ?? state.loaded ?? state.loading;
+}
+
+/** Name each PC only when models come from more than one. */
+function spansNodes() {
+  return new Set(state.models.map((m) => m.node_id ?? "")).size > 1;
 }
 
 export function navbarHtml() {
@@ -75,26 +80,30 @@ function modelMenu(trigger) {
 
   const render = () => {
     const q = input.value.trim().toLowerCase();
-    items = state.models.filter((file) => displayName(file).toLowerCase().includes(q));
-    const current = selectedModel();
+    items = state.models.filter((m) => displayName(m.file).toLowerCase().includes(q));
+    const named = spansNodes();
     list.innerHTML =
       items
         .map(
-          (file, idx) =>
-            `<button type="button" class="model-item${idx === highlighted ? " highlighted" : ""}" data-idx="${idx}" aria-label="${escapeHtml(displayName(file))}">` +
+          (m, idx) =>
+            `<button type="button" class="model-item${idx === highlighted ? " highlighted" : ""}" data-idx="${idx}" aria-label="${escapeHtml(displayName(m.file))}">` +
             `<div class="model-item-main"><div class="model-item-row">` +
             `<div class="model-item-image"><img src="${LOGO_URL}" alt="Model"></div>` +
-            `<div class="model-item-label"><div>${escapeHtml(displayName(file))}</div></div>` +
+            `<div class="model-item-label"><div>${escapeHtml(displayName(m.file))}</div></div>` +
+            (named && m.node ? `<div class="model-item-node">${escapeHtml(m.node)}</div>` : "") +
             `</div></div>` +
-            `<div class="model-item-end">${file === current ? `<div>${icon("check", "size-3")}</div>` : ""}</div>` +
+            `<div class="model-item-end">${isLoaded(m) ? `<div>${icon("check", "size-3")}</div>` : ""}</div>` +
             `</button>`
         )
-        .join("") || `<div><div class="model-empty">No results found</div></div>`;
+        .join("") ||
+      (state.models.length === 0
+        ? `<div><div class="model-empty">No models on any PC yet</div></div>`
+        : `<div><div class="model-empty">No results found</div></div>`);
   };
   const choose = (idx) => {
-    const file = items[idx];
+    const m = items[idx];
     closeMenu();
-    if (file) switchModel(file);
+    if (m) switchModel(m.file, m.local ? null : m.node_id, m.local ? null : m.node);
   };
 
   input.addEventListener("input", () => {
@@ -121,7 +130,7 @@ function modelMenu(trigger) {
     if (item) choose(Number(item.dataset.idx));
   });
 
-  highlighted = Math.max(0, state.models.indexOf(selectedModel()));
+  highlighted = Math.max(0, state.models.findIndex((m) => isLoaded(m)));
   render();
   openMenu(trigger, menu, { align: "start", sideOffset: 2, alignOffset: -1 });
   setTimeout(() => input.focus(), 0);
