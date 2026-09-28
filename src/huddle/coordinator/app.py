@@ -123,6 +123,8 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
         except hfhub.HFError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if info.file_size is not None:
+            # A fresh node has never had anything to put here yet.
+            service.config.models.dir.mkdir(parents=True, exist_ok=True)
             free = shutil.disk_usage(service.config.models.dir).free
             needed = int(info.file_size * _DISK_MARGIN)
             if free < needed:

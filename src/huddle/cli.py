@@ -10,21 +10,31 @@ from typing import Annotated
 import typer
 
 from huddle import __version__
-from huddle.config import HuddleConfig
+from huddle.config import HuddleConfig, find_config_file
 from huddle.llamacpp import LlamaCppError, binary_version, list_devices
 
 app = typer.Typer(help="Run LLMs across a cluster of Linux machines.", no_args_is_help=True)
 
-ConfigOption = Annotated[Path, typer.Option("--config", "-f", help="Path to huddle.yaml")]
-DEFAULT_CONFIG = Path("huddle.yaml")
+ConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        "-f",
+        help="Path to huddle.yaml (default: $HUDDLE_CONFIG, ./huddle.yaml, "
+        "then ~/.config/huddle/huddle.yaml; none of them is required)",
+    ),
+]
+DEFAULT_CONFIG: Path | None = None
 
 
-def _load(path: Path) -> HuddleConfig:
-    if not path.exists():
-        typer.secho(f"config not found: {path}", fg=typer.colors.RED, err=True)
+def _load(path: Path | None) -> HuddleConfig:
+    found = find_config_file(path)
+    if found is not None and not found.exists():
+        # Only a path someone named can be missing: the others are looked for.
+        typer.secho(f"config not found: {found}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
     try:
-        return HuddleConfig.load(path)
+        return HuddleConfig.load(found)
     except Exception as exc:
         typer.secho(f"invalid config: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc

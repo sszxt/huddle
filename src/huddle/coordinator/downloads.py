@@ -87,6 +87,7 @@ class DownloadService:
         assert self._repo_id is not None
         assert self._filename is not None
         try:
+            self._models_dir.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(
                 hfhub.download,
                 self._repo_id,

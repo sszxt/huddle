@@ -1,19 +1,23 @@
 """Node and cluster configuration.
 
-Binary paths and model directories are always configured, never hardcoded: they
-differ between the dev box (where llama.cpp is not installed at all) and each
-target box. Config loads from YAML, with ``HUDDLE_*`` environment overrides for
-the handful of values that change per invocation.
+Every key has a default, so a freshly installed node runs with no config file
+at all: binaries are found where `huddle setup` installs them (or on PATH) and
+models live under the XDG data directory. Binary paths are still never
+hardcoded, only defaulted. Config loads from YAML, with ``HUDDLE_*``
+environment overrides for the handful of values that change per invocation.
 """
 
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from huddle import paths
 
 DEFAULT_RPC_PORT = 50052
 DEFAULT_AGENT_PORT = 8081
@@ -35,14 +39,23 @@ class BinariesConfig(Model):
     builds fails at connect time with a version-mismatch error.
     """
 
-    llama_server: Path
+    llama_server: Path = Field(default_factory=paths.find_llama_server)
     rpc_server: Path | None = None
+
+    @model_validator(mode="after")
+    def _rpc_server_from_same_build(self) -> BinariesConfig:
+        # Left unset, take the worker that sits beside llama-server. Set to null
+        # explicitly, stay without one: that node was deliberately made unable
+        # to lend its GPUs.
+        if "rpc_server" not in self.model_fields_set:
+            self.rpc_server = paths.find_rpc_server(self.llama_server)
+        return self
 
 
 class NodeConfig(Model):
     """Identity and agent bind address for this machine."""
 
-    name: str = Field(default_factory=lambda: os.uname().nodename)
+    name: str = Field(default_factory=socket.gethostname)
     agent_host: str = "127.0.0.1"
     agent_port: int = DEFAULT_AGENT_PORT
 
@@ -54,7 +67,7 @@ class ModelsConfig(Model):
     tensors to RPC peers, so there is nothing to distribute to workers.
     """
 
-    dir: Path
+    dir: Path = Field(default_factory=paths.default_models_dir)
     default: str | None = None
 
     def resolve(self, name: str | None = None) -> Path:
@@ -203,8 +216,8 @@ class HuddleConfig(Model):
     """Top-level configuration for one node."""
 
     node: NodeConfig = Field(default_factory=NodeConfig)
-    binaries: BinariesConfig
-    models: ModelsConfig
+    binaries: BinariesConfig = Field(default_factory=BinariesConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     rpc: RpcConfig = Field(default_factory=RpcConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
@@ -212,6 +225,15 @@ class HuddleConfig(Model):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     supervisor: SupervisorConfig = Field(default_factory=SupervisorConfig)
     peers: list[PeerConfig] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_sections_are_defaults(cls, data: Any) -> Any:
+        # A section whose keys are all commented out parses as null; that
+        # means "the defaults", not an error.
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if value is not None}
+        return data
 
     @model_validator(mode="after")
     def _check_peer_names_unique(self) -> HuddleConfig:
@@ -222,12 +244,34 @@ class HuddleConfig(Model):
         return self
 
     @classmethod
-    def load(cls, path: str | Path) -> HuddleConfig:
-        """Load config from a YAML file, applying environment overrides."""
-        path = Path(path)
-        with path.open() as handle:
-            raw: dict[str, Any] = yaml.safe_load(handle) or {}
+    def load(cls, path: str | Path | None) -> HuddleConfig:
+        """Load config from a YAML file, applying environment overrides.
+
+        With no file, every default applies: that is a valid node.
+        """
+        raw: dict[str, Any] = {}
+        if path is not None:
+            with Path(path).open() as handle:
+                raw = yaml.safe_load(handle) or {}
         return cls.model_validate(_apply_env_overrides(raw))
+
+
+def find_config_file(explicit: Path | None = None) -> Path | None:
+    """The config file to use, or None to run on defaults.
+
+    In order: an explicit path, ``$HUDDLE_CONFIG``, ``./huddle.yaml`` (how
+    nodes deployed from a checkout have always run), then the per-user file
+    `huddle setup` writes.
+    """
+    if explicit is not None:
+        return explicit
+    from_env = os.environ.get("HUDDLE_CONFIG")
+    if from_env:
+        return Path(from_env)
+    for candidate in (Path("huddle.yaml"), paths.default_config_file()):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 # Environment overrides, kept deliberately small: only values that legitimately

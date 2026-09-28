@@ -78,3 +78,78 @@ def test_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HUDDLE_MODEL", "override.gguf")
     config = HuddleConfig.load(write_config(tmp_path, MINIMAL))
     assert config.models.default == "override.gguf"
+
+
+def test_no_config_file_is_a_valid_node() -> None:
+    """A freshly installed node runs on defaults alone."""
+    config = HuddleConfig.load(None)
+    assert config.models.dir.name == "models"
+    assert config.binaries.llama_server.name == "llama-server"
+
+
+def test_installed_llamacpp_is_found(tmp_path: Path) -> None:
+    from huddle import paths
+
+    release = paths.installed_llamacpp()
+    assert release is not None
+    release.mkdir(parents=True)
+    (release / "llama-server").write_text("")
+    (release / "ggml-rpc-server").write_text("")
+
+    config = HuddleConfig.load(None)
+    assert config.binaries.llama_server == release / "llama-server"
+    assert config.binaries.rpc_server == release / "ggml-rpc-server"
+
+
+def test_rpc_server_is_only_taken_from_beside_llama_server(tmp_path: Path) -> None:
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "llama-server").write_text("")
+    (build / "rpc-server").write_text("")  # upstream README's older name
+    config = HuddleConfig.model_validate(
+        {"binaries": {"llama_server": str(build / "llama-server")}}
+    )
+    assert config.binaries.rpc_server == build / "rpc-server"
+
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    config = HuddleConfig.model_validate(
+        {"binaries": {"llama_server": str(alone / "llama-server")}}
+    )
+    assert config.binaries.rpc_server is None
+
+
+def test_explicit_null_rpc_server_stays_unset(tmp_path: Path) -> None:
+    """A node made unable to lend its GPUs on purpose must stay that way."""
+    (tmp_path / "llama-server").write_text("")
+    (tmp_path / "ggml-rpc-server").write_text("")
+    config = HuddleConfig.model_validate(
+        {"binaries": {"llama_server": str(tmp_path / "llama-server"), "rpc_server": None}}
+    )
+    assert config.binaries.rpc_server is None
+
+
+def test_config_file_lookup_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from huddle import paths
+    from huddle.config import find_config_file
+
+    monkeypatch.chdir(tmp_path)
+    assert find_config_file() is None, "no file anywhere: run on defaults"
+
+    user = paths.default_config_file()
+    user.parent.mkdir(parents=True)
+    user.write_text("{}")
+    assert find_config_file() == user
+
+    (tmp_path / "huddle.yaml").write_text("{}")
+    assert find_config_file() == Path("huddle.yaml"), "a checkout's own file comes first"
+
+    monkeypatch.setenv("HUDDLE_CONFIG", "/etc/elsewhere.yaml")
+    assert find_config_file() == Path("/etc/elsewhere.yaml")
+    assert find_config_file(Path("given.yaml")) == Path("given.yaml")
+
+
+def test_an_empty_section_means_its_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "huddle.yaml"
+    path.write_text("binaries:\n  # llama_server: /somewhere\nmodels:\n")
+    assert HuddleConfig.load(path).models.dir == HuddleConfig.load(None).models.dir

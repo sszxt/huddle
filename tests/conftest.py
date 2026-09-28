@@ -17,6 +17,22 @@ from tests.fakes.gguf_builder import write_gguf
 FAKES_DIR = Path(__file__).parent / "fakes"
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test out of the real ~/.config, ~/.local/share and ~/.local/state.
+
+    Config defaults look there for llama.cpp, models and the node's identity;
+    a test must neither read a developer's install nor write into it.
+    """
+    for variable, name in (
+        ("XDG_CONFIG_HOME", "xdg-config"),
+        ("XDG_DATA_HOME", "xdg-data"),
+        ("XDG_STATE_HOME", "xdg-state"),
+    ):
+        monkeypatch.setenv(variable, str(tmp_path / name))
+    monkeypatch.delenv("HUDDLE_CONFIG", raising=False)
+
+
 @pytest.fixture
 def fake_llama_server() -> Path:
     return FAKES_DIR / "fake_llama_server.py"
