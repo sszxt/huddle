@@ -50,9 +50,76 @@ def _configure_logging() -> None:
 
 
 @app.command()
-def version() -> None:
-    """Print the Huddle version."""
-    typer.echo(__version__)
+def version(config: ConfigOption = DEFAULT_CONFIG) -> None:
+    """Print the Huddle version, and the llama.cpp build it runs."""
+    from huddle.pin import load_pin
+
+    typer.echo(f"huddle {__version__}")
+    pin = load_pin()
+    settings = _load(config)
+    try:
+        build = binary_version(settings.binaries.llama_server)
+    except LlamaCppError:
+        typer.echo("llama.cpp not installed (run `huddle setup`)")
+        return
+    typer.echo(f"llama.cpp {build}")
+    if pin is not None:
+        from huddle.llamacpp import version_commit
+
+        commit = version_commit(build) or ""
+        matches = bool(commit) and (pin.ref.startswith(commit) or commit.startswith(pin.ref))
+        typer.echo(
+            f"  pinned release {pin.release or pin.ref[:9]}"
+            + ("" if matches else "  (this build differs: run `huddle setup`)")
+        )
+
+
+@app.command()
+def setup(
+    cluster: Annotated[
+        str | None,
+        typer.Option(help="Cluster name: PCs on this network with the same name join up"),
+    ] = None,
+    models_dir: Annotated[
+        Path | None, typer.Option(help="Where to keep models (default ~/.local/share/huddle)")
+    ] = None,
+    service: Annotated[
+        bool, typer.Option(help="Install and start a systemd service (needs sudo)")
+    ] = True,
+    firewall: Annotated[
+        bool, typer.Option(help="Open Huddle's ports to the local subnet (needs sudo)")
+    ] = True,
+) -> None:
+    """Install llama.cpp and make this machine a Huddle node. Re-run to upgrade."""
+    from huddle.setup import SetupError, run_setup
+
+    try:
+        run_setup(
+            cluster=cluster,
+            models_dir=models_dir.expanduser().resolve() if models_dir else None,
+            service=service,
+            firewall=firewall,
+            echo=typer.echo,
+        )
+    except SetupError as exc:
+        typer.secho(f"✗ {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def uninstall(
+    purge: Annotated[
+        bool, typer.Option(help="Also delete downloaded models, config and node identity")
+    ] = False,
+) -> None:
+    """Remove the service, firewall rules and llama.cpp that `huddle setup` added."""
+    from huddle.setup import SetupError, run_uninstall
+
+    try:
+        run_uninstall(purge=purge, echo=typer.echo)
+    except SetupError as exc:
+        typer.secho(f"✗ {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
 
 @app.command("config")

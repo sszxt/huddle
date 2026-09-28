@@ -11,6 +11,7 @@ whole node.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import json
 import os
 import platform
@@ -180,6 +181,11 @@ def _addresses(sys_net: Path) -> list[NetAddress]:
     ]
 
 
+def local_addresses(sys_net: Path = SYS_NET) -> list[NetAddress]:
+    """Every non-loopback IPv4 address on this machine, with link speeds."""
+    return _addresses(sys_net)
+
+
 def default_route_address() -> str | None:
     """The address this host uses to reach the rest of the LAN, if any.
 
@@ -190,6 +196,14 @@ def default_route_address() -> str | None:
         sock.connect(("192.0.2.1", 1))  # TEST-NET-1: routes nowhere, sends nothing
         address = str(sock.getsockname()[0])
         return None if address.startswith("127.") or address == "0.0.0.0" else address
+    return None
+
+
+def subnet_of(address: str, addresses: list[NetAddress]) -> str | None:
+    """The network ``address`` sits in, e.g. "192.168.0.0/24", from its prefix."""
+    for candidate in addresses:
+        if candidate.address == address and candidate.prefix is not None:
+            return str(ipaddress.ip_interface(f"{address}/{candidate.prefix}").network)
     return None
 
 
@@ -230,6 +244,7 @@ __all__ = [
     "cpu_percent",
     "default_route_address",
     "link_speed",
+    "local_addresses",
     "parse_cpu_model",
     "parse_cpu_times",
     "parse_ip_addresses",
@@ -237,4 +252,5 @@ __all__ = [
     "parse_os_release",
     "parse_uptime",
     "probe_system",
+    "subnet_of",
 ]

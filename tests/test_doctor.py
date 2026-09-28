@@ -206,7 +206,7 @@ async def test_unreachable_peer_fails() -> None:
     async with agent_answering({}) as client:
         check = await check_peer(client, report, SAME)
     assert check.level is Level.FAIL
-    assert "Tailscale" in (check.hint or "")
+    assert "huddle setup" in (check.hint or ""), "an unreachable peer is usually a firewall"
 
 
 async def test_endpoint_without_a_worker_fails(free_port: int) -> None:

@@ -120,7 +120,7 @@ def check_binaries(config: HuddleConfig) -> Check:
             Level.FAIL,
             problems[0],
             details=problems[1:] + notes,
-            hint="point binaries: at the build; scripts/bootstrap-node.sh prints the paths",
+            hint="run `huddle setup` to install llama.cpp, or point binaries: at a build",
         )
     if notes:
         return Check("binaries", Level.WARN, notes[0])
@@ -149,7 +149,7 @@ def check_build(config: HuddleConfig, pin: str | None) -> tuple[Check, str | Non
                 "llama.cpp",
                 Level.WARN,
                 f"built from {commit}, but llamacpp.pin says {pin[:12]}",
-                hint="rebuild with scripts/bootstrap-node.sh; every node must share one commit",
+                hint="run `huddle setup` to install the pinned release; every node must share one",
             ),
             version,
         )
@@ -231,8 +231,8 @@ async def check_peers(
                     Level.WARN,
                     "discovery is on but found no peers",
                     hint=(
-                        "peers must run the agent with discovery.enabled and an "
-                        "advertise address; multicast must reach this node"
+                        "the other PCs must be running Huddle (`huddle setup`) on this "
+                        "network with the same discovery.cluster; multicast must reach them"
                     ),
                 )
             ], []
@@ -268,8 +268,8 @@ async def check_peer(
             f"agent unreachable at {peer.host}:{peer.agent_port}",
             details=[report.error or "no response"],
             hint=(
-                "is the agent running there? peers must be dialled on a stable "
-                "address (Tailscale), not a LAN lease that moves"
+                "is Huddle running there? If it is, a firewall is dropping the port: "
+                "run `huddle setup` on that node to open it to this subnet"
             ),
         )
 

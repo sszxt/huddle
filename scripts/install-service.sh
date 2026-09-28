@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Install Huddle as a systemd service on this node.
+# Install Huddle as a systemd service on this node, running from a checkout.
+#
+# Superseded by `huddle setup` (what install.sh runs), which installs the
+# released package, llama.cpp and firewall rules as well, and replaces a unit
+# written by this script. Kept for nodes deliberately run from a checkout.
 #
 # The unit is generated from the local environment rather than copied from a
 # template, because user, home directory and uv location differ per node — the
