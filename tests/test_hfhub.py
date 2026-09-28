@@ -108,3 +108,25 @@ def test_download_wraps_hub_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         hfhub.download(
             "someone/repo", "model.gguf", local_dir=tmp_path, on_progress=lambda a, b: None
         )
+
+
+def test_download_from_a_subfolder_lands_where_models_are_listed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Repos that keep each quantisation in a folder must not hide the file."""
+
+    def fake_hf_hub_download(
+        *, repo_id: str, filename: str, local_dir: Path, tqdm_class: type
+    ) -> str:
+        target = local_dir / filename
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"GGUF")
+        return str(target)
+
+    monkeypatch.setattr(hfhub, "hf_hub_download", fake_hf_hub_download)
+    path = hfhub.download(
+        "someone/repo", "Q4_K_M/model.gguf", local_dir=tmp_path, on_progress=lambda *_: None
+    )
+    assert path == tmp_path / "model.gguf"
+    assert path.read_bytes() == b"GGUF"
+    assert not (tmp_path / "Q4_K_M").exists()

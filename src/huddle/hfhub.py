@@ -7,6 +7,7 @@ Every function here does blocking I/O (``huggingface_hub`` is built on
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,7 +143,15 @@ def download(
         )
     except (HfHubHTTPError, EntryNotFoundError, OSError) as exc:
         raise _wrap(exc, what=f"download failed for {repo_id!r}/{filename!r}") from exc
-    return Path(path)
+    downloaded = Path(path)
+    flat = local_dir / downloaded.name
+    if downloaded != flat:
+        # Repos that keep each quantisation in a subfolder ("Q4_K_M/x.gguf")
+        # would otherwise land where the model list never looks.
+        downloaded.replace(flat)
+        with contextlib.suppress(OSError):
+            downloaded.parent.rmdir()
+    return flat
 
 
 __all__ = [
