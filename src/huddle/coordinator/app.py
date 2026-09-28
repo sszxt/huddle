@@ -18,7 +18,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from huddle import hfhub
+from huddle import catalog, hfhub
 from huddle.coordinator.downloads import AlreadyDownloading, DownloadService, DownloadStatus
 from huddle.coordinator.overview import OverviewService
 from huddle.coordinator.service import (
@@ -71,6 +71,11 @@ class ModelEntry(BaseModel):
     size: int | None = None
     # This node's own file, as opposed to one on another node.
     local: bool = False
+
+
+class CatalogResponse(BaseModel):
+    capacity: catalog.Capacity
+    models: list[catalog.CatalogEntry]
 
 
 class ModelsResponse(BaseModel):
@@ -253,6 +258,29 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
         entries = [entry for group in found for entry in group]
         remote_models.update(at=time.monotonic(), entries=entries)
         return entries
+
+    @router.get("/catalog")
+    async def recommended() -> CatalogResponse:
+        """Models to offer a cluster with none, each labelled with whether it fits.
+
+        Sized for this node as the head, since a model downloaded from its
+        page lands on its disk and it is the one that would serve it.
+        """
+        view = await overview.overview()
+        live = [node for node in view.nodes if node.role != "offline" and node.hardware]
+        me = next((node for node in live if node.id == service.identity.id), None)
+        if me is None or me.hardware is None:
+            raise HTTPException(status_code=503, detail="this node cannot describe its hardware")
+        room = catalog.capacity(
+            [node.hardware for node in live if node.hardware is not None],
+            me.hardware,
+            service.config.planner.headroom,
+        )
+        present = {name: service.identity.name for name in service.available_models()}
+        if service.membership is not None:
+            for entry in await _remote_entries():
+                present.setdefault(entry.file, entry.node)
+        return CatalogResponse(capacity=room, models=catalog.entries(room, present))
 
     @router.post("/model", response_model=None)
     async def switch(body: StartRequest, request: Request) -> ClusterStatus | Response:
