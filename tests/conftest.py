@@ -79,6 +79,9 @@ def huddle_config(
             "backend": {"host": "127.0.0.1", "port": free_port, "autostart": True},
             "api": {"host": "127.0.0.1", "port": 8000},
             "rpc": {"port": free_port + 1},
+            # Off unless a test turns it on: real multicast in every app would
+            # be slow, and flaky wherever multicast does not work.
+            "discovery": {"enabled": False},
         }
     )
 
@@ -159,7 +162,12 @@ def worker_config(
     models.mkdir(exist_ok=True)
     return HuddleConfig.model_validate(
         {
-            "node": {"name": "peer1", "agent_port": agent_port},
+            # Its own identity: nodes sharing a state directory would share one.
+            "node": {
+                "name": "peer1",
+                "agent_port": agent_port,
+                "state_dir": str(models.parent / f"state-{agent_port}"),
+            },
             "binaries": {
                 "llama_server": str(fake_llama_server),
                 "rpc_server": str(fake_rpc_server) if fake_rpc_server else None,
@@ -167,6 +175,7 @@ def worker_config(
             "models": {"dir": str(models)},
             "backend": {"autostart": False},
             "rpc": {"port": rpc_port, "advertise": "127.0.0.1"},
+            "discovery": {"enabled": False},
         }
     )
 
@@ -190,7 +199,11 @@ async def peer_agent(
 
     config = HuddleConfig.model_validate(
         {
-            "node": {"name": "peer1", "agent_port": agent_port},
+            "node": {
+                "name": "peer1",
+                "agent_port": agent_port,
+                "state_dir": str(tmp_path / "peer-state"),
+            },
             "binaries": {
                 "llama_server": str(fake_llama_server),
                 "rpc_server": str(fake_rpc_server),
@@ -198,6 +211,7 @@ async def peer_agent(
             "models": {"dir": str(models)},
             "backend": {"autostart": False},
             "rpc": {"port": rpc_port, "advertise": "127.0.0.1"},
+            "discovery": {"enabled": False},
         }
     )
     server = uvicorn.Server(

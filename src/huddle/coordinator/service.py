@@ -17,14 +17,26 @@ from collections.abc import Mapping
 import httpx
 from pydantic import BaseModel
 
-from huddle.agent.service import BackendService
+from huddle.agent.service import OWNER_ID_HEADER, OWNER_NAME_HEADER, BackendService
 from huddle.config import HuddleConfig, PeerConfig
-from huddle.coordinator.cluster import PeerReport, build_device_list, query_peers
+from huddle.coordinator.cluster import (
+    PeerReport,
+    build_device_list,
+    local_llamacpp_version,
+    query_peer_list,
+    query_peers,
+)
 from huddle.coordinator.planner import PlacementDevice, Plan, plan_placement
+from huddle.discovery import Identity, load_identity
 from huddle.gguf import ModelInfo, read_gguf
 from huddle.hardware import NodeHardware, probe
 from huddle.llamacpp import detect_out_of_memory
+from huddle.membership import Membership
 from huddle.process import ProcessError
+from huddle.state import StateStore
+
+# Marks a request one node passes on to another, so it is never passed on again.
+FORWARDED_HEADER = "X-Huddle-Forwarded"
 
 log = logging.getLogger("huddle.cluster")
 
@@ -73,6 +85,9 @@ class ClusterStatus(BaseModel):
     running: bool
     model: str | None = None
     head_node: str
+    head_id: str | None = None
+    # What was asked for, while it is still loading (`model` is what loaded).
+    requested_model: str | None = None
     workers: list[str] = []
     plan: ClusterPlan | None = None
     # `desired` is what we were asked for; `running` is what is true. They differ
@@ -99,9 +114,20 @@ class ClusterService:
         self,
         config: HuddleConfig,
         backend: BackendService,
+        *,
+        identity: Identity | None = None,
+        membership: Membership | None = None,
+        state: StateStore | None = None,
     ) -> None:
         self.config = config
         self.backend = backend
+        self.identity = identity or load_identity(config)
+        # None when discovery is off: the static `peers:` list, as before.
+        self.membership = membership
+        self.state = state
+        self._llamacpp_version: str | None = None
+        self._version_known = False
+        self._renewer: asyncio.Task[None] | None = None
         supervisor = config.supervisor
         self.watch_interval = supervisor.watch_interval
         self.max_restarts = supervisor.max_restarts
@@ -135,21 +161,50 @@ class ClusterService:
         self._worker_strikes = 0
 
     @property
+    def headers(self) -> dict[str, str]:
+        """Who this node is, for the agents it borrows from."""
+        return {OWNER_ID_HEADER: self.identity.id, OWNER_NAME_HEADER: self.identity.name}
+
+    @property
     def known_peers(self) -> list[PeerConfig]:
         """Configured peers, then any discovered ones the last plan saw.
 
         For showing the cluster, not planning it: no discovery browse happens
         here, because a browse takes seconds and this is read on every refresh.
         """
+        if self.membership is not None:
+            return [member.peer() for member in self.membership.known()]
         peers = list(self.config.peers)
         names = {peer.name for peer in peers}
         return peers + [peer for peer in self._resolved_peers if peer.name not in names]
+
+    @property
+    def is_head(self) -> bool:
+        """Whether this node serves, or has been asked to serve, a model."""
+        return self._desired or self.backend.running or self._lock.locked()
+
+    def busy_reason(self) -> str | None:
+        """Why this node cannot lend its GPU right now, if it cannot."""
+        if self.backend.running:
+            return "serving a model itself"
+        if self._lock.locked() or self._desired:
+            return "loading a model itself"
+        return None
+
+    def llamacpp_version(self) -> str | None:
+        """This node's llama.cpp build, asked once: it costs a subprocess."""
+        if not self._version_known:
+            self._llamacpp_version = local_llamacpp_version(self.config)
+            self._version_known = True
+        return self._llamacpp_version
 
     def status(self) -> ClusterStatus:
         return ClusterStatus(
             running=self.backend.running,
             model=self.backend.status().model,
             head_node=self.config.node.name,
+            head_id=self.identity.id,
+            requested_model=self._model_name if self._desired else None,
             workers=[peer.name for peer in self._started_workers],
             plan=self._plan,
             desired=self._desired,
@@ -169,7 +224,15 @@ class ClusterService:
         """Work out where layers should go, without starting anything."""
         info: ModelInfo = read_gguf(self.config.models.resolve(model))
         local = probe(self.config.node.name, self.config.binaries.llama_server)
-        reports = await query_peers(self.config)
+        if self.membership is not None:
+            # The live table, not a browse: it already knows who is up and who
+            # is free, and a browse would cost seconds on every plan. Asked
+            # afresh, though: it can be a few seconds stale.
+            await self.membership.refresh()
+            peers = self.membership.plan_peers(await asyncio.to_thread(self.llamacpp_version))
+            reports = await query_peer_list(peers, headers=self.headers)
+        else:
+            reports = await query_peers(self.config)
         self._resolved_peers = [report.peer for report in reports]
         return plan_cluster(
             self.config,
@@ -185,6 +248,7 @@ class ClusterService:
         async with self._lock:
             await self._start_locked(model)
         self._mark_started_fresh()
+        self._remember()
         # Report after the bookkeeping, not before: a status captured inside the
         # lock would still show the restarts and failure this start just cleared.
         return self.status()
@@ -339,7 +403,18 @@ class ClusterService:
             await self._teardown()
             await self._start_locked(model)
         self._mark_started_fresh()
+        self._remember()
         return self.status()
+
+    def _remember(self) -> None:
+        """Bring this model back after a reboot, with the peers it ran on.
+
+        Only for a model someone asked for here. A boot-time resume does not
+        call this, so it cannot keep renewing a decision nobody made again.
+        """
+        model = self.backend.status().model
+        if self.state is not None and model:
+            self.state.set_resume(model, list(self._started_workers))
 
     def available_models(self) -> list[str]:
         """GGUF files this node can load, newest first."""
@@ -354,10 +429,28 @@ class ClusterService:
     async def stop(self) -> ClusterStatus:
         """Stop the head first, then the workers it depends on."""
         self._desired = False
+        if self.state is not None:
+            # Stopped, or handed over to another node: either way, this node
+            # should not bring the model back when it next boots.
+            self.state.clear_resume()
         await self._stop_watching()
+        await self._stop_renewing()
         async with self._lock:
             await self._teardown()
             return self.status()
+
+    async def shutdown(self) -> None:
+        """Stop everything this process runs, keeping the resume decision.
+
+        The service stopping (a reboot, an upgrade) is not someone deciding
+        the model should stop, so unlike `stop` this leaves the node set to
+        bring it back.
+        """
+        self._desired = False
+        await self._stop_watching()
+        await self._stop_renewing()
+        async with self._lock:
+            await self._teardown()
 
     async def _teardown(self) -> None:
         """Tear the cluster down. Caller holds the lock."""
@@ -474,8 +567,10 @@ class ClusterService:
             self._worker_strikes = 0
             return False
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            states = [(peer, await _worker_state(client, peer)) for peer in self._started_workers]
+        async with httpx.AsyncClient(timeout=5.0, headers=self.headers) as client:
+            states = [
+                (peer, await self._worker_state(client, peer)) for peer in self._started_workers
+            ]
         gone = [peer.name for peer, alive in states if alive is False]
         if not gone:
             self._worker_strikes = 0
@@ -506,12 +601,20 @@ class ClusterService:
         plan = self._plan
         if self.rejoin_interval <= 0 or plan is None or plan.n_gpu_layers >= plan.n_layers:
             return
-        if now - self._last_rejoin_check < self.rejoin_interval:
+        # A node appearing is worth checking at once; otherwise, now and then.
+        appeared = self.membership is not None and self.membership.changed.is_set()
+        if not appeared and now - self._last_rejoin_check < self.rejoin_interval:
             return
         self._last_rejoin_check = now
+        if self.membership is not None:
+            self.membership.changed.clear()
 
         try:
-            reports = await query_peers(self.config, timeout=5.0)
+            if self.membership is not None:
+                peers = self.membership.plan_peers(self.llamacpp_version())
+                reports = await query_peer_list(peers, timeout=5.0, headers=self.headers)
+            else:
+                reports = await query_peers(self.config, timeout=5.0)
         except Exception as exc:
             log.debug("rejoin check failed: %s", exc)
             return
@@ -560,17 +663,18 @@ class ClusterService:
             self._restarts = 0
 
     async def _start_workers(self, peers: list[PeerConfig]) -> None:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, headers=self.headers) as client:
             for peer in peers:
                 url = f"http://{peer.host}:{peer.agent_port}/agent/rpc/start"
                 try:
                     response = await client.post(url)
-                    if response.status_code == 409 and not await _worker_listening(client, peer):
-                        # 409 covers "already running" but also "cannot start",
-                        # e.g. no rpc_server binary. Only the first leaves
-                        # anything for llama.cpp to connect to.
+                    if response.status_code == 409 and not await self._usable_worker(client, peer):
+                        # 409 covers "already running" but also "cannot start"
+                        # (no rpc_server binary), "lent to another head" and
+                        # "busy with its own model". Only a worker that is
+                        # listening and not someone else's can be used.
                         raise ProcessError(
-                            f"peer {peer.name} could not start its worker: {response.text[:200]}"
+                            f"peer {peer.name} could not start its worker: {_detail(response)}"
                         )
                     if response.status_code not in (200, 409):
                         raise ProcessError(
@@ -584,9 +688,35 @@ class ClusterService:
                     await self._stop_workers()
                     raise
                 self._started_workers.append(peer)
+        if self._started_workers:
+            self._start_renewing()
+
+    async def _usable_worker(self, client: httpx.AsyncClient, peer: PeerConfig) -> bool:
+        return await self._worker_state(client, peer) is True
+
+    async def _worker_state(self, client: httpx.AsyncClient, peer: PeerConfig) -> bool | None:
+        """Whether a peer has a worker listening that this head may use.
+
+        A worker lent to another head does not count, whatever its state: its
+        memory holds someone else's layers. One with no recorded owner (an
+        older Huddle's, or one that outlived its agent) still does, as it
+        always has. Asking also renews this head's lease.
+
+        None when its agent cannot be asked: an unanswered question is not
+        evidence that the worker is gone.
+        """
+        try:
+            response = await client.get(f"http://{peer.host}:{peer.agent_port}/agent/rpc")
+            status = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        owner = status.get("owner_id")
+        if owner is not None and owner != self.identity.id:
+            return False
+        return bool(status.get("running") or status.get("foreign"))
 
     async def _stop_workers(self) -> None:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=self.headers) as client:
             for peer in self._started_workers:
                 url = f"http://{peer.host}:{peer.agent_port}/agent/rpc/stop"
                 try:
@@ -596,23 +726,110 @@ class ClusterService:
                     log.warning("could not stop worker on %s: %s", peer.name, exc)
         self._started_workers = []
 
+    # -- leases -------------------------------------------------------------------
 
-async def _worker_state(client: httpx.AsyncClient, peer: PeerConfig) -> bool | None:
-    """Whether a peer has a worker listening, whoever started it.
+    def _start_renewing(self) -> None:
+        if self._renewer is None or self._renewer.done():
+            self._renewer = asyncio.create_task(self._renew_leases())
 
-    None when its agent cannot be asked: an unanswered question is not evidence
-    that the worker is gone.
-    """
+    async def _stop_renewing(self) -> None:
+        if self._renewer is None:
+            return
+        self._renewer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._renewer
+        self._renewer = None
+
+    async def _renew_leases(self) -> None:
+        """Keep telling the workers this head is still here.
+
+        Its own task, not part of the supervisor's checks: those pause while a
+        start holds the lock, and a large load holds it for minutes, longer
+        than a lease lasts.
+        """
+        interval = max(0.5, self.config.rpc.lease_timeout / 4)
+        async with httpx.AsyncClient(timeout=5.0, headers=self.headers) as client:
+            while True:
+                await asyncio.sleep(interval)
+                for peer in list(self._started_workers):
+                    with contextlib.suppress(httpx.HTTPError):
+                        await client.get(f"http://{peer.host}:{peer.agent_port}/agent/rpc")
+
+    # -- one model per cluster ------------------------------------------------------
+
+    async def load_here(self, model: str) -> ClusterStatus:
+        """Serve ``model`` from this node, taking the cluster over if need be.
+
+        One model runs per cluster. Whoever is serving now is asked to stop,
+        which releases the workers it borrowed, possibly including this
+        node's own GPU, which it then takes back before planning.
+        """
+        path = self.config.models.resolve(model)
+        if not path.exists():
+            raise ProcessError(f"model not found: {path}")
+        if self.membership is not None:
+            await self.membership.refresh()
+            for head in self.membership.heads():
+                log.info("handover: asking %s to stop serving", head.display)
+                url = f"http://{head.host}:{head.port}/cluster/stop"
+                try:
+                    async with httpx.AsyncClient(timeout=900.0) as client:
+                        response = await client.post(url, headers={FORWARDED_HEADER: "1"})
+                        response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    raise ProcessError(
+                        f"{head.display} is serving a model and did not stop: {exc}"
+                    ) from exc
+                await self.membership.refresh(head.key)
+        if self.backend.rpc_running:
+            log.info("handover: taking this node's GPU back for its own model")
+            await self.backend.stop_rpc()
+        return await self.switch_model(model)
+
+    async def boot(self) -> None:
+        """What a node does when it starts: resume a model, or wait to be asked.
+
+        A node with nothing to resume stays idle, which is the zero-config
+        case: it lends its GPU to whichever node loads a model. If another
+        node is already serving by the time this one has listened for a
+        moment, it keeps serving and this node joins it instead of fighting
+        over the peers.
+        """
+        resume = self.state.load().resume_model if self.state is not None else None
+        model = resume
+        if model is None and self.config.backend.autostart:
+            model = self.config.models.default
+        if model is None:
+            return
+        if not self.config.models.resolve(model).exists():
+            log.warning("not resuming %s: the file is gone", model)
+            if resume is not None and self.state is not None:
+                self.state.clear_resume()
+            return
+
+        if self.membership is not None:
+            await self.membership.wait_settled()
+            head = self.membership.head()
+            if head is not None:
+                log.info(
+                    "not resuming %s: %s is already serving %s",
+                    model,
+                    head.display,
+                    head.report.model if head.report else "a model",
+                )
+                if resume is not None and self.state is not None:
+                    self.state.clear_resume()
+                return
+        await self.start_with_retry(model)
+
+
+def _detail(response: httpx.Response) -> str:
+    """An agent's error message, without the JSON around it."""
     try:
-        response = await client.get(f"http://{peer.host}:{peer.agent_port}/agent/rpc")
-        status = response.json()
-    except (httpx.HTTPError, ValueError):
-        return None
-    return bool(status.get("running") or status.get("foreign"))
-
-
-async def _worker_listening(client: httpx.AsyncClient, peer: PeerConfig) -> bool:
-    return await _worker_state(client, peer) is True
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else response.text[:200]
 
 
 def plan_cluster(

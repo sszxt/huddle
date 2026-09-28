@@ -58,6 +58,10 @@ class NodeConfig(Model):
     name: str = Field(default_factory=socket.gethostname)
     agent_host: str = "127.0.0.1"
     agent_port: int = DEFAULT_AGENT_PORT
+    # Peers tell nodes apart by a random id kept in the state directory, not by
+    # name. Set it only for machines cloned from one disk image after first run.
+    id: str | None = None
+    state_dir: Path | None = None
 
 
 class ModelsConfig(Model):
@@ -117,6 +121,11 @@ class RpcConfig(Model):
     # an address anyone can connect to, so report something routable instead —
     # on this cluster, the node's Tailscale address.
     advertise: str | None = None
+    # A worker lent to a head that stops renewing for this long is stopped. A
+    # powered-off head never closes its connection, and ggml-rpc-server only
+    # frees a client's memory when the connection closes — so without this the
+    # GPU would stay full until someone restarted the worker by hand.
+    lease_timeout: float = Field(default=60.0, gt=0)
 
 
 class PlannerConfig(Model):
@@ -150,20 +159,32 @@ class DiscoveryConfig(Model):
     entry always wins, because someone who wrote an address down meant it.
     """
 
-    enabled: bool = False
+    # On by default: finding each other is what makes a fresh install join a
+    # cluster with nothing to configure.
+    enabled: bool = True
+    # Nodes join only others with the same name, so two groups of machines on
+    # one network can stay separate clusters. Everyone left at the default
+    # finds everyone else: that is the zero-config case.
+    cluster: str = Field(default="default", min_length=1, max_length=63)
     timeout: float = Field(default=3.0, gt=0)
     # Browses to make before giving up. At boot the network may not be ready and
     # peers may still be booting, so a single short browse finds nothing and the
     # cluster silently plans as a single node — which for a large model means an
     # out-of-memory failure rather than a small cluster.
     attempts: int = Field(default=3, ge=1)
-    # The address peers should dial us on, which is deliberately not the address
-    # multicast sees: that one is a DHCP lease and moves. Defaults to
-    # ``rpc.advertise`` when unset.
+    # The address peers should dial us on: a stable one (a Tailscale address,
+    # say) when set. Unset, ``rpc.advertise``, else this machine's LAN address,
+    # which the advertiser re-announces whenever DHCP moves it.
     advertise: str | None = None
     # Refuse peers built from a different llama.cpp. The RPC handshake rejects
     # them anyway, but at connect time with an unhelpful message.
     require_matching_version: bool = True
+    # How often each known node is asked what it is doing. Liveness comes from
+    # this, not from mDNS: a powered-off node's records outlive it by an hour.
+    poll_interval: float = Field(default=3.0, gt=0)
+    # At startup, how long to listen before deciding the cluster is what has
+    # been heard so far — for instance, whether someone else is already serving.
+    settle: float = Field(default=5.0, ge=0)
 
 
 class SupervisorConfig(Model):
@@ -197,6 +218,9 @@ class PeerConfig(Model):
     host: str
     agent_port: int = DEFAULT_AGENT_PORT
     rpc_port: int = DEFAULT_RPC_PORT
+    # The node's own identity, once known. Configured peers usually leave it
+    # out; it is learned from the peer when first asked.
+    id: str | None = None
 
     @property
     def rpc_endpoint(self) -> str:
@@ -205,9 +229,14 @@ class PeerConfig(Model):
 
 
 class ApiConfig(Model):
-    """The public OpenAI-compatible API."""
+    """The public OpenAI-compatible API, the web UI, and this node's agent routes.
 
-    host: str = "127.0.0.1"
+    All on one port, reachable from the LAN by default: other nodes borrow
+    this one's GPU and pass chat requests on through it. Bound to 127.0.0.1
+    instead, a node can still borrow others' GPUs but lends none of its own.
+    """
+
+    host: str = "0.0.0.0"
     port: int = DEFAULT_API_PORT
     api_key: str | None = None
 
@@ -278,6 +307,7 @@ def find_config_file(explicit: Path | None = None) -> Path | None:
 # vary per invocation rather than per machine.
 _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "HUDDLE_MODEL": ("models", "default"),
+    "HUDDLE_CLUSTER": ("discovery", "cluster"),
     "HUDDLE_API_PORT": ("api", "port"),
     "HUDDLE_AGENT_PORT": ("node", "agent_port"),
     "HUDDLE_RPC_PORT": ("rpc", "port"),

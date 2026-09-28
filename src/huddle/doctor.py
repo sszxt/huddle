@@ -29,7 +29,7 @@ import httpx
 from huddle.config import HuddleConfig
 from huddle.coordinator.cluster import PeerReport, query_peer, resolve_peers
 from huddle.coordinator.service import plan_cluster
-from huddle.discovery import discover
+from huddle.discovery import discover, load_identity
 from huddle.gguf import GGUFError, ModelInfo, read_gguf
 from huddle.hardware import NodeHardware, probe
 from huddle.llamacpp import LlamaCppError, binary_version, same_build, version_commit
@@ -221,7 +221,7 @@ async def check_peers(
     # doctor must report, and discovery would otherwise hide it.
     lenient = config.model_copy(deep=True)
     lenient.discovery.require_matching_version = False
-    peers = await resolve_peers(lenient, local_version)
+    peers = await resolve_peers(lenient, local_version, own_id=load_identity(config).id)
 
     if not peers:
         if config.discovery.enabled:
@@ -603,7 +603,11 @@ async def run_doctor(
         add(await _safely("plan", plan))
 
     report.checks.extend(cluster_checks)
-    if running and status is not None:
+    head_id = status.get("head_id") if status else None
+    if running and status is not None and head_id not in (None, load_identity(config).id):
+        # Another node is serving; its own doctor can check what it placed.
+        add(Check("placement", Level.SKIP, f"served by {status.get('head_node')}"))
+    elif running and status is not None:
         live = status
 
         async def workers() -> Check:

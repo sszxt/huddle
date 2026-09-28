@@ -16,8 +16,8 @@ import httpx
 
 from huddle import hfhub
 from huddle.agent.service import BackendStatus, RpcStatus
-from huddle.config import HuddleConfig
-from huddle.coordinator.cluster import PeerReport, query_peers
+from huddle.config import DEFAULT_AGENT_PORT, HuddleConfig, PeerConfig
+from huddle.coordinator.cluster import PeerReport
 from huddle.coordinator.downloads import DownloadStatus
 from huddle.coordinator.service import ClusterStatus
 from huddle.doctor import api_base_url
@@ -107,7 +107,7 @@ class ClusterPoller:
 
         reports_by_name: dict[str, PeerReport] = {}
         if cluster.workers:
-            reports_by_name = {r.peer.name: r for r in await query_peers(self.config)}
+            reports_by_name = await self._worker_reports(client, base)
 
         nodes = [head]
         async with httpx.AsyncClient() as peer_client:
@@ -198,6 +198,35 @@ class ClusterPoller:
             layers=_layers_for(cluster, name),
             error=report.error,
         )
+
+    async def _worker_reports(self, client: httpx.AsyncClient, base: str) -> dict[str, PeerReport]:
+        """Where each worker is and what it has, from the node's own overview.
+
+        The node already knows its peers; browsing mDNS here instead would
+        cost seconds on every refresh.
+        """
+        try:
+            response = await client.get(f"{base}/cluster/nodes", timeout=10.0)
+            response.raise_for_status()
+            nodes = response.json().get("nodes") or []
+        except (httpx.HTTPError, ValueError):
+            return {}
+        reports: dict[str, PeerReport] = {}
+        for node in nodes:
+            if not node.get("address"):
+                continue  # the node answering, not a peer
+            peer = PeerConfig(
+                name=node["name"],
+                host=node["address"],
+                agent_port=node.get("agent_port") or DEFAULT_AGENT_PORT,
+            )
+            hardware = node.get("hardware")
+            reports[peer.name] = PeerReport(
+                peer=peer,
+                hardware=NodeHardware.model_validate(hardware) if hardware else None,
+                error=None if hardware else node.get("error"),
+            )
+        return reports
 
     async def _models(self, client: httpx.AsyncClient, base: str) -> tuple[list[str], str | None]:
         try:

@@ -1,37 +1,50 @@
-# Huddle node configuration.
+# Huddle node configuration: every key, with its default.
 #
-# Copy to huddle.yaml and edit. huddle.yaml is gitignored because it holds
-# machine-specific paths and host addresses.
+# None of this is required. A node installed with install.sh runs on the
+# defaults and finds the other PCs by itself. Put only what you change in
+# ~/.config/huddle/huddle.yaml (or ./huddle.yaml when running from a checkout),
+# then restart Huddle: `sudo systemctl restart huddle`.
 
 node:
-  name: omarchy
+  # name: my-pc             # default: this machine's hostname
+  # A random identity is kept in ~/.local/state/huddle/state.json; peers tell
+  # PCs apart by it, since hostnames can clash. Set `id` only for machines
+  # cloned from one disk image after first run.
+  id: null
+  state_dir: null           # default: ~/.local/state/huddle
+  # Where `huddle agent` (lend-only mode) listens. `huddle serve` uses api:.
   agent_host: 127.0.0.1
   agent_port: 8081
 
 # Both binaries must come from the SAME llama.cpp build: the RPC handshake
-# rejects peers whose version differs.
+# rejects peers whose version differs. Default: the release `huddle setup`
+# installs under ~/.local/share/huddle/llama.cpp/, else llama-server on PATH,
+# with the rpc-server beside it.
 binaries:
-  llama_server: /home/edgeup/llama.cpp/build/bin/llama-server
+  # llama_server: /opt/llama.cpp/build/bin/llama-server
   # NOTE: the built binary is ggml-rpc-server; upstream's README still calls it rpc-server.
-  rpc_server: /home/edgeup/llama.cpp/build/bin/ggml-rpc-server
+  # rpc_server: /opt/llama.cpp/build/bin/ggml-rpc-server
 
-# Only the head node needs the GGUF file. It reads the model locally and streams
-# tensors to RPC peers, so there is nothing to copy to workers.
+# Only the head needs the GGUF file. It reads the model locally and streams
+# tensors to the other PCs, so there is nothing to copy to them.
 models:
-  dir: /home/edgeup/models
-  default: qwen2.5-0.5b-instruct-q4_k_m.gguf
+  # dir: /srv/models         # default: ~/.local/share/huddle/models
+  default: null             # started at boot when set, with backend.autostart.
+                            # Loading a model in the UI is remembered on its own.
 
-# The head llama-server process.
+# The head's llama-server process.
 backend:
   host: 127.0.0.1
   port: 8080
   ctx_size: 4096
   parallel: 1
   n_gpu_layers: all      # exact count, "auto", or "all"
+  autostart: true        # start models.default at boot (if set)
+  api_key: null
   log_file: null         # full llama.cpp output on disk (--log-file)
   extra_args: []
 
-# This node's rpc-server, when acting as a worker.
+# This PC's rpc-server, when it lends its GPU to another PC's model.
 rpc:
   bind: 0.0.0.0          # llama.cpp defaults to 127.0.0.1, which is unreachable
                          # from other machines. Keep 0.0.0.0 and firewall the port:
@@ -40,6 +53,8 @@ rpc:
   cache: true            # without this, every load re-streams weights over the LAN
   devices: []            # empty = let llama.cpp choose
   threads: null
+  advertise: null
+  lease_timeout: 60      # stop lending to a head that stops checking in
 
 # How conservatively to fill devices.
 planner:
@@ -58,27 +73,36 @@ supervisor:
                             # spans ~20 minutes, enough to ride out a peer reboot
   backoff_max: 300          # failed restarts back off exponentially up to this
   stable_after: 600         # a healthy run this long forgives earlier restarts
+  peer_wait: 120            # after a start or crash, wait this long for PCs the
+                            # model last ran with before starting without them
+  rejoin_interval: 60       # while layers run on CPU, look for PCs that could help
 
-# The public OpenAI-compatible API.
+# The OpenAI-compatible API, the web UI and this PC's control routes, on one
+# port. On 0.0.0.0 the other PCs can borrow this one's GPU and pass chat
+# through it; 127.0.0.1 keeps it to itself (it can still borrow others').
 api:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 8000
-  api_key: null
+  api_key: null             # checked on /v1/*; must match on every PC
 
-# Find peers on the LAN instead of listing them. Discovery uses link-local
-# multicast, but peers are dialled on the address they advertise below — the
-# address multicast sees is a DHCP lease and moves.
+# Finding the other PCs on the LAN (mDNS).
 discovery:
-  enabled: false
-  timeout: 3.0
-  advertise: null                 # defaults to rpc.advertise
-  require_matching_version: true  # peers built from another llama.cpp commit
-                                  # are rejected by the RPC handshake anyway,
-                                  # but only later and less clearly
+  enabled: true
+  cluster: default          # PCs join only others with the same name
+  advertise: null           # what peers dial; default: this PC's LAN address,
+                            # re-announced when DHCP moves it. Set a Tailscale
+                            # address here to cluster over the tailnet instead.
+  poll_interval: 3          # how often each PC is asked what it is doing
+  settle: 5                 # at startup, listen this long before deciding
+  timeout: 3.0              # one-shot browses (huddle discover, doctor)
+  attempts: 3
+  require_matching_version: true  # PCs on another llama.cpp build are left out:
+                                  # the RPC handshake would reject them later
 
-# Cluster peers. Discovered peers are added to these; an explicit entry wins.
+# PCs to use whether or not discovery finds them. Discovered PCs are added to
+# these; an explicit entry wins.
 peers: []
 # - name: box2
 #   host: 192.168.0.55
-#   agent_port: 8081
+#   agent_port: 8000
 #   rpc_port: 50052

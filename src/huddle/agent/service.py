@@ -8,6 +8,10 @@ some other node's head process.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import httpx
 from pydantic import BaseModel
@@ -23,6 +27,29 @@ from huddle.llamacpp import (
     require_binary,
 )
 from huddle.process import ManagedProcess, ProcessError, ReadyCheck, tcp_is_open
+from huddle.system import default_route_address
+
+log = logging.getLogger("huddle.agent")
+
+# Headers a head sends to say who it is when it borrows this node's GPU.
+OWNER_ID_HEADER = "X-Huddle-Node-Id"
+OWNER_NAME_HEADER = "X-Huddle-Node-Name"
+
+
+@dataclass(frozen=True)
+class Owner:
+    """The head a worker is lent to."""
+
+    id: str
+    name: str
+
+
+class LentError(ProcessError):
+    """This node's worker already serves a different head."""
+
+
+class BusyError(ProcessError):
+    """This node is using its own GPU, so it has nothing to lend."""
 
 
 class BackendStatus(BaseModel):
@@ -55,6 +82,10 @@ class RpcStatus(BaseModel):
     pid: int | None = None
     argv: list[str] = []
     returncode: int | None = None
+    # The head this worker is lent to. None for a worker started by a head
+    # that does not say who it is (an older Huddle).
+    owner_id: str | None = None
+    owner_name: str | None = None
 
 
 class BackendService:
@@ -71,6 +102,11 @@ class BackendService:
         self._lock = asyncio.Lock()
         self._rpc: ManagedProcess | None = None
         self._rpc_lock = asyncio.Lock()
+        self._owner: Owner | None = None
+        self._renewed_at = 0.0
+        # Why this node cannot lend right now, if it cannot: set by whoever
+        # runs a head here, which needs every byte of its own GPU.
+        self.busy: Callable[[], str | None] = lambda: None
 
     @property
     def base_url(self) -> str:
@@ -190,13 +226,22 @@ class BackendService:
     def rpc_running(self) -> bool:
         return self._rpc is not None and self._rpc.running
 
-    async def rpc_report(self) -> RpcStatus:
+    @property
+    def owner(self) -> Owner | None:
+        return self._owner if self.rpc_running else None
+
+    async def rpc_report(self, renew: str | None = None) -> RpcStatus:
         """Status reconciled against the port, not just our own bookkeeping.
 
         An agent restart loses track of a worker it started, because the child
         outlives it. Reporting `running=False` while something is serving on the
         port is worse than useless: the coordinator would try to start another.
+
+        ``renew`` is the id of the head asking: if the worker is lent to it,
+        asking renews the lease.
         """
+        if renew is not None:
+            self.renew(renew)
         status = self.rpc_status()
         if not status.running and await tcp_is_open("127.0.0.1", self.config.rpc.port, timeout=1.0):
             status.foreign = True
@@ -204,7 +249,10 @@ class BackendService:
 
     def rpc_status(self) -> RpcStatus:
         rpc = self.config.rpc
-        endpoint = f"{rpc.advertise}:{rpc.port}" if rpc.advertise else None
+        host = rpc.advertise or self.config.discovery.advertise
+        if host is None and self.rpc_running:
+            host = default_route_address()
+        endpoint = f"{host}:{rpc.port}" if host else None
         return RpcStatus(
             running=self.rpc_running,
             endpoint=endpoint if self.rpc_running else None,
@@ -214,16 +262,39 @@ class BackendService:
             pid=self._rpc.pid if self._rpc else None,
             argv=self._rpc.argv if self._rpc else [],
             returncode=self._rpc.returncode if self._rpc else None,
+            owner_id=self.owner.id if self.owner else None,
+            owner_name=self.owner.name if self.owner else None,
         )
+
+    def renew(self, owner_id: str) -> bool:
+        if self.owner is not None and self.owner.id == owner_id:
+            self._renewed_at = asyncio.get_running_loop().time()
+            return True
+        return False
 
     def rpc_logs(self) -> list[str]:
         return self._rpc.logs() if self._rpc else []
 
-    async def start_rpc(self, *, timeout: float = 60.0) -> RpcStatus:
-        """Launch this node's worker so a remote head can place layers here."""
+    async def start_rpc(self, owner: Owner | None = None, *, timeout: float = 60.0) -> RpcStatus:
+        """Launch this node's worker so a remote head can place layers here.
+
+        A head that names itself gets a lease: asking again is harmless, and a
+        different head is refused rather than handed a worker that is busy
+        holding someone else's layers.
+        """
         async with self._rpc_lock:
             if self.rpc_running:
+                current = self.owner
+                if owner is not None and current is not None and current.id == owner.id:
+                    self._renewed_at = asyncio.get_running_loop().time()
+                    return self.rpc_status()
+                if owner is not None and current is not None:
+                    raise LentError(f"this node's GPU is lent to {current.name}")
                 raise ProcessError("rpc-server is already running; stop it first")
+
+            reason = self.busy()
+            if reason:
+                raise BusyError(f"{self.config.node.name} is {reason}")
 
             port = self.config.rpc.port
             if await tcp_is_open("127.0.0.1", port, timeout=1.0):
@@ -247,15 +318,47 @@ class BackendService:
             await process.start(ready=self._rpc_probe(), timeout=timeout)
 
             self._rpc = process
+            self._owner = owner
+            self._renewed_at = asyncio.get_running_loop().time()
+            if owner is not None:
+                log.info("lending this node's GPU to %s", owner.name)
             return self.rpc_status()
 
-    async def stop_rpc(self, *, timeout: float = 30.0) -> RpcStatus:
+    async def stop_rpc(
+        self, *, owner_id: str | None = None, force: bool = True, timeout: float = 30.0
+    ) -> RpcStatus:
+        """Stop the worker. Unless ``force``, only the head it is lent to may."""
         async with self._rpc_lock:
+            current = self.owner
+            if not force and current is not None and owner_id != current.id:
+                raise LentError(f"this node's GPU is lent to {current.name}")
             if self._rpc is not None:
                 await self._rpc.stop(timeout=timeout)
             status = self.rpc_status()
-            self._rpc = None
+            self._rpc, self._owner = None, None
             return status
+
+    async def watch_leases(self) -> None:
+        """Take the GPU back from a head that stopped renewing its lease.
+
+        A head that lost power never closes its connection, and ggml-rpc-server
+        frees a client's buffers only when it does: without this the GPU would
+        stay full until someone restarted the worker by hand.
+        """
+        timeout = self.config.rpc.lease_timeout
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(min(5.0, timeout / 3))
+            owner = self.owner
+            if owner is None or loop.time() - self._renewed_at < timeout:
+                continue
+            log.warning(
+                "%s stopped renewing its lease %.0fs ago; stopping the worker to free the GPU",
+                owner.name,
+                loop.time() - self._renewed_at,
+            )
+            with contextlib.suppress(Exception):
+                await self.stop_rpc()
 
     def _rpc_probe(self) -> ReadyCheck:
         """Readiness is a successful TCP connect: there is no health endpoint.

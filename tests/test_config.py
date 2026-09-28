@@ -149,6 +149,13 @@ def test_config_file_lookup_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert find_config_file(Path("given.yaml")) == Path("given.yaml")
 
 
+def test_the_example_config_loads_and_matches_the_defaults() -> None:
+    """huddle.example.yaml documents the defaults; it must also be valid."""
+    example = HuddleConfig.load(Path(__file__).parents[1] / "huddle.example.yaml")
+    defaults = HuddleConfig.load(None)
+    assert example.model_dump() == defaults.model_dump()
+
+
 def test_an_empty_section_means_its_defaults(tmp_path: Path) -> None:
     path = tmp_path / "huddle.yaml"
     path.write_text("binaries:\n  # llama_server: /somewhere\nmodels:\n")

@@ -96,11 +96,15 @@ def serve(
     from huddle.app import create_app
 
     settings = _load(config)
+    # Into the config, not just uvicorn: the node advertises this port to its
+    # peers, and a loopback host decides that it cannot lend its GPU.
+    settings.api.host = host or settings.api.host
+    settings.api.port = port or settings.api.port
     _configure_logging()
     uvicorn.run(
         create_app(settings),
-        host=host or settings.api.host,
-        port=port or settings.api.port,
+        host=settings.api.host,
+        port=settings.api.port,
         log_level="info",
     )
 
@@ -229,18 +233,22 @@ def discover(
     import asyncio
 
     from huddle.discovery import discover as browse
+    from huddle.discovery import load_identity
 
     settings = _load(config)
-    typer.echo(f"browsing for {timeout:g}s ...")
-    peers = asyncio.run(browse(settings.discovery, exclude=settings.node.name, timeout=timeout))
+    me = load_identity(settings)
+    typer.echo(f"browsing for {timeout:g}s (cluster {settings.discovery.cluster!r}) ...")
+    peers = asyncio.run(
+        browse(settings.discovery, exclude=settings.node.name, exclude_id=me.id, timeout=timeout)
+    )
 
     if not peers:
         typer.secho("no peers found", fg=typer.colors.YELLOW)
-        typer.echo("  peers advertise only when discovery.enabled is true in their config")
+        typer.echo("  other PCs must be running Huddle on this network, in the same cluster")
         return
 
     for peer in peers:
-        typer.echo(f"  {peer.name}")
+        typer.echo(f"  {peer.name}  ({peer.role or 'worker'}, id {(peer.id or '?')[:8]})")
         typer.echo(f"    connect on   {peer.host}  (agent {peer.agent_port}, rpc {peer.rpc_port})")
         if peer.seen_at and peer.seen_at != peer.host:
             # These differing is the normal case, not a warning: multicast sees a

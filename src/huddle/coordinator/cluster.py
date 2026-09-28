@@ -54,12 +54,15 @@ async def query_peer(
     return PeerReport(peer=peer, hardware=NodeHardware.model_validate(response.json()))
 
 
-async def resolve_peers(config: HuddleConfig, local_version: str | None = None) -> list[PeerConfig]:
+async def resolve_peers(
+    config: HuddleConfig, local_version: str | None = None, *, own_id: str | None = None
+) -> list[PeerConfig]:
     """The peers to use: those configured, plus any found on the LAN.
 
     A configured peer always wins over a discovered one of the same name —
     writing an address down is a decision, and discovery should not quietly
-    override it.
+    override it. ``own_id`` excludes this node by identity, so a peer that
+    happens to share its hostname is not mistaken for it.
     """
     peers = list(config.peers)
     if not config.discovery.enabled:
@@ -67,7 +70,7 @@ async def resolve_peers(config: HuddleConfig, local_version: str | None = None) 
 
     known = {peer.name for peer in peers}
     try:
-        discovered = await discover(config.discovery, exclude=config.node.name)
+        discovered = await discover(config.discovery, exclude=config.node.name, exclude_id=own_id)
     except Exception as exc:
         log.warning("discovery failed, using configured peers only: %s", exc)
         return peers
@@ -112,17 +115,27 @@ def _version_mismatch(
 
 
 async def query_peers(config: HuddleConfig, *, timeout: float = 10.0) -> list[PeerReport]:
+    """Resolve peers from config and a browse, then ask each of them."""
+    peers = await resolve_peers(config, local_llamacpp_version(config))
+    return await query_peer_list(peers, timeout=timeout)
+
+
+async def query_peer_list(
+    peers: list[PeerConfig],
+    *,
+    timeout: float = 10.0,
+    headers: dict[str, str] | None = None,
+) -> list[PeerReport]:
     """Ask every peer in parallel, preserving order."""
-    peers = await resolve_peers(config, _local_llamacpp_version(config))
     if not peers:
         return []
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(headers=headers) as client:
         return list(
             await asyncio.gather(*(query_peer(client, peer, timeout=timeout) for peer in peers))
         )
 
 
-def _local_llamacpp_version(config: HuddleConfig) -> str | None:
+def local_llamacpp_version(config: HuddleConfig) -> str | None:
     from huddle.llamacpp import LlamaCppError, binary_version
 
     try:

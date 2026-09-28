@@ -22,6 +22,7 @@ from huddle.agent.service import RpcStatus
 from huddle.config import PeerConfig
 from huddle.coordinator.service import ClusterPlan, ClusterService, ClusterStatus
 from huddle.hardware import NodeHardware
+from huddle.membership import Member
 from huddle.system import SystemInfo, probe_system
 
 Role = Literal["head", "worker", "idle", "offline"]
@@ -43,7 +44,9 @@ class NodeView(BaseModel):
 
     name: str
     role: Role
-    # What the head dials to reach this node; None for the head itself.
+    # The node's identity; the page marks the one it is being viewed from.
+    id: str | None = None
+    # What the head dials to reach this node; None for the node answering.
     address: str | None = None
     agent_port: int | None = None
     # Network round trip from the head, in milliseconds: the time to open a TCP
@@ -54,6 +57,10 @@ class NodeView(BaseModel):
     rpc: RpcStatus | None = None
     layers: int = 0
     error: str | None = None
+    # The head this node's GPU is lent to, when it is a worker.
+    lent_to: str | None = None
+    # What the node is serving, when it is a head.
+    model: str | None = None
 
 
 class ClusterOverview(BaseModel):
@@ -62,6 +69,10 @@ class ClusterOverview(BaseModel):
     cluster: ClusterStatus
     tokens_per_sec: float | None = None
     backend_port: int
+    # The node that built this overview, and the one the page was asked from:
+    # the same unless a node passed the question on to the head.
+    node_id: str | None = None
+    viewer_id: str | None = None
     nodes: list[NodeView]
     # Layer indices per device, as llama.cpp itself reported placing them.
     # Empty unless the head runs with -lv 5; the plan is the fallback.
@@ -124,17 +135,30 @@ async def _fetch[M: BaseModel](client: httpx.AsyncClient, url: str, model: type[
 
 
 async def peer_view(
-    client: httpx.AsyncClient, peer: PeerConfig, workers: list[str], layers: dict[str, int]
+    client: httpx.AsyncClient,
+    peer: PeerConfig,
+    workers: list[str],
+    layers: dict[str, int],
+    member: Member | None = None,
 ) -> NodeView:
-    """Ask one peer's agent about itself. Never raises: offline is an answer."""
+    """Ask one peer's agent about itself. Never raises: offline is an answer.
+
+    With a membership entry, the node's own account of its role is used —
+    another node may be the head — and a node known to be offline is not
+    asked at all, which keeps a page with a powered-off PC on it fast.
+    """
     base = f"http://{peer.host}:{peer.agent_port}"
     view = NodeView(
         name=peer.name,
         role="offline",
+        id=peer.id,
         address=peer.host,
         agent_port=peer.agent_port,
         layers=layers.get(peer.name, 0),
     )
+    if member is not None and not member.alive:
+        view.error = member.error or "not answering"
+        return view
     try:
         response = await client.get(f"{base}/agent/health", timeout=_TIMEOUT)
         response.raise_for_status()
@@ -150,6 +174,12 @@ async def peer_view(
         _fetch(client, f"{base}/agent/rpc", RpcStatus),
     )
     view.role = "worker" if peer.name in workers else "idle"
+    report = member.report if member is not None else None
+    if report is not None:
+        if report.role == "head":
+            view.role, view.model = "head", report.model
+        elif report.role == "worker":
+            view.role, view.lent_to = "worker", report.owner_name
     view.rtt_ms, view.hardware, view.system, view.rpc = rtt, hardware, system, rpc
     view.error = hardware.error if hardware else "the agent answered but sent no hardware report"
     return view
@@ -192,26 +222,41 @@ class OverviewService:
         hardware, system = await asyncio.gather(
             asyncio.to_thread(backend.hardware), asyncio.to_thread(probe_system)
         )
-        head = NodeView(
+        owner = backend.owner
+        me = NodeView(
             name=config.node.name,
-            role="head",
+            # Without a membership table this node is the head by definition,
+            # as it always was; with one, it is whatever it is doing.
+            role="head" if cluster.is_head or cluster.membership is None else "idle",
+            id=cluster.identity.id,
             hardware=hardware,
             system=system,
             layers=layers.get(config.node.name, 0),
             error=hardware.error,
+            model=status.model or status.requested_model if cluster.is_head else None,
         )
+        if me.role == "idle" and backend.rpc_running:
+            me.role, me.lent_to = "worker", owner.name if owner else None
 
-        peers = cluster.known_peers
-        async with httpx.AsyncClient() as client:
+        pairs: list[tuple[PeerConfig, Member | None]]
+        if cluster.membership is not None:
+            pairs = [(member.peer(), member) for member in cluster.membership.known()]
+        else:
+            pairs = [(peer, None) for peer in cluster.known_peers]
+        async with httpx.AsyncClient(headers=cluster.headers) as client:
             views = await asyncio.gather(
-                *(peer_view(client, peer, status.workers, layers) for peer in peers)
+                *(peer_view(client, peer, status.workers, layers, m) for peer, m in pairs)
             )
 
+        # The head first, wherever it is; the page draws links from it.
+        nodes = [me, *views]
+        nodes.sort(key=lambda node: 0 if node.role == "head" else 1)
         return ClusterOverview(
             cluster=status,
             tokens_per_sec=backend.status().tokens_per_sec,
             backend_port=config.backend.port,
-            nodes=[head, *views],
+            node_id=cluster.identity.id,
+            nodes=nodes,
             placement=backend.placement(),
             generated_at=time.time(),
         )

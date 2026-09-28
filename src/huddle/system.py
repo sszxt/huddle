@@ -10,6 +10,7 @@ whole node.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -179,6 +180,19 @@ def _addresses(sys_net: Path) -> list[NetAddress]:
     ]
 
 
+def default_route_address() -> str | None:
+    """The address this host uses to reach the rest of the LAN, if any.
+
+    Connecting a UDP socket sends nothing; it only makes the kernel choose the
+    outgoing interface for that destination, whose address is then readable.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock, contextlib.suppress(OSError):
+        sock.connect(("192.0.2.1", 1))  # TEST-NET-1: routes nowhere, sends nothing
+        address = str(sock.getsockname()[0])
+        return None if address.startswith("127.") or address == "0.0.0.0" else address
+    return None
+
+
 def probe_system(
     *,
     sample_interval: float = 0.2,
@@ -214,6 +228,7 @@ __all__ = [
     "NetAddress",
     "SystemInfo",
     "cpu_percent",
+    "default_route_address",
     "link_speed",
     "parse_cpu_model",
     "parse_cpu_times",

@@ -2,8 +2,12 @@
 
 llama-server already speaks OpenAI, so this is mostly a proxy. It exists rather
 than exposing llama-server directly because Huddle owns auth, cluster status and
-(later) model switching — a model change restarts the backend, and callers
-should never see that.
+model switching — a model change restarts the backend, and callers should never
+see that.
+
+Any node answers. One that is not serving passes the request to the node that
+is, so the chat works from whichever PC the browser is on; ``aiter_raw`` on
+both hops keeps a stream a stream.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from huddle.agent.service import BackendService
-from huddle.coordinator.service import ClusterService
+from huddle.coordinator.service import FORWARDED_HEADER, ClusterService
 
 # No read timeout: a long generation legitimately holds the connection open for
 # minutes, and in a cluster the first request also waits on weight streaming.
@@ -45,22 +49,70 @@ def build_router(
         if token != expected:
             raise HTTPException(status_code=401, detail="invalid api key")
 
-    def require_backend() -> None:
-        if not service.running:
+    def target(request: Request) -> tuple[str, dict[str, str]]:
+        """Where to send a request: this node's backend, or the serving node.
+
+        Returns the base URL and any headers to add. A request already passed
+        on once is never passed on again, so two nodes cannot bounce it.
+        """
+        if service.running:
+            return service.base_url, {}
+        head = None
+        if (
+            cluster is not None
+            and cluster.membership is not None
+            and not cluster.is_head
+            and not request.headers.get(FORWARDED_HEADER)
+        ):
+            head = cluster.membership.head()
+        if head is not None and head.report is not None and not head.report.starting:
+            headers = {FORWARDED_HEADER: "1"}
+            if "authorization" in request.headers:
+                headers["authorization"] = request.headers["authorization"]
+            return f"http://{head.host}:{head.port}", headers
+        if head is not None:
             raise HTTPException(
-                status_code=503,
-                detail="backend is not running; start it via POST /agent/backend/start",
+                status_code=503, detail=f"{head.display} is still loading the model"
             )
+        raise HTTPException(
+            status_code=503,
+            detail="the backend is not running: no model is loaded; pick one in the web UI "
+            "or POST /cluster/model",
+        )
+
+    def remote_health() -> dict[str, Any] | None:
+        """/health for a node that is not serving, when another one is."""
+        if cluster is None or cluster.membership is None or cluster.is_head:
+            return None
+        head = cluster.membership.head()
+        if head is None or head.report is None:
+            return None
+        return {
+            "status": "starting" if head.report.starting else "ok",
+            "node": service.config.node.name,
+            "model": head.report.model,
+            "role": "worker" if service.rpc_running else "idle",
+            "head": head.display,
+            "head_id": head.id,
+            "workers": head.report.workers,
+        }
 
     @router.get("/health")
     async def health() -> dict[str, Any]:
         status = service.status()
+        remote = None if status.running else remote_health()
+        if remote is not None:
+            return remote
         body: dict[str, Any] = {
             "status": "ok" if status.running else "backend_down",
             "node": service.config.node.name,
             "model": status.model,
         }
         if cluster is not None:
+            if cluster.is_head:
+                body["role"], body["head"] = "head", service.config.node.name
+            else:
+                body["role"] = "worker" if service.rpc_running else "idle"
             cluster_status = cluster.status()
             if cluster_status.starting:
                 body["status"] = "starting"
@@ -78,8 +130,8 @@ def build_router(
     @router.get("/v1/models")
     async def models(request: Request) -> Response:
         check_auth(request)
-        require_backend()
-        upstream = await client.get(f"{service.base_url}/v1/models")
+        base, headers = target(request)
+        upstream = await client.get(f"{base}/v1/models", headers=headers)
         return Response(
             content=upstream.content,
             status_code=upstream.status_code,
@@ -100,16 +152,16 @@ def build_router(
 
     async def _proxy(request: Request, path: str) -> Response:
         check_auth(request)
-        require_backend()
+        base, headers = target(request)
 
         try:
             payload: dict[str, Any] = await request.json()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid JSON body") from exc
 
-        url = f"{service.base_url}{path}"
+        url = f"{base}{path}"
         if not payload.get("stream"):
-            upstream = await client.post(url, json=payload)
+            upstream = await client.post(url, json=payload, headers=headers)
             return Response(
                 content=upstream.content,
                 status_code=upstream.status_code,
@@ -118,7 +170,7 @@ def build_router(
 
         # Open the stream before returning, so an upstream error still reaches
         # the caller as a real status code rather than as a 200 full of nothing.
-        upstream_request = client.build_request("POST", url, json=payload)
+        upstream_request = client.build_request("POST", url, json=payload, headers=headers)
         upstream_response = await client.send(upstream_request, stream=True)
         if upstream_response.status_code >= 400:
             body = await upstream_response.aread()

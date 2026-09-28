@@ -426,10 +426,7 @@ async def test_recovers_once_the_cause_clears(
 
 
 async def test_discovered_peers_get_their_workers_started(
-    huddle_config: HuddleConfig,
-    peer_agent: dict[str, int],
-    constrained_gpus: None,
-    monkeypatch: pytest.MonkeyPatch,
+    huddle_config: HuddleConfig, peer_agent: dict[str, int], constrained_gpus: None
 ) -> None:
     """A discovered peer must have its worker started, not just be named in --rpc.
 
@@ -438,25 +435,26 @@ async def test_discovered_peers_get_their_workers_started(
     every discovered peer while still passing its address to llama.cpp.
     """
     from huddle.discovery import DiscoveredPeer
+    from tests.fakes.memory_lan import LanHub
 
-    async def fake_discover(*_args: object, **_kw: object) -> list[DiscoveredPeer]:
-        return [
-            DiscoveredPeer(
-                name="peer1",
-                host="127.0.0.1",
-                agent_port=peer_agent["agent_port"],
-                rpc_port=peer_agent["rpc_port"],
-            )
-        ]
-
-    monkeypatch.setattr("huddle.coordinator.cluster.discover", fake_discover)
+    hub = LanHub()
+    hub.announce(
+        DiscoveredPeer(
+            name="peer1",
+            host="127.0.0.1",
+            agent_port=peer_agent["agent_port"],
+            rpc_port=peer_agent["rpc_port"],
+            role="worker",
+        )
+    )
 
     huddle_config.backend.autostart = False
     huddle_config.peers = []  # discovery only, as in the real deployment
     huddle_config.discovery.enabled = True
-    app, http = await cluster_client(huddle_config)
+    app = create_app(huddle_config, lan_factory=hub.lan)
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://huddle.test")
 
-    async with app.router.lifespan_context(app), http:  # type: ignore[attr-defined]
+    async with app.router.lifespan_context(app), http:
         status = (await http.post("/cluster/start")).json()
         assert status["plan"]["rpc_endpoints"], "the discovered peer should be in --rpc"
         assert status["workers"] == ["peer1"], "and its worker must have been started"
