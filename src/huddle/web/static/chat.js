@@ -10,6 +10,13 @@ import { icon } from "./icons.js";
 import { bindCodeBlockActions, escapeHtml, renderMarkdown } from "./markdown.js";
 import { navbarHtml } from "./navbar.js";
 import {
+  initOnboarding,
+  onboardingHtml,
+  refreshCatalog,
+  updateOnboarding,
+  wantsOnboarding,
+} from "./onboarding.js";
+import {
   displayName,
   isMobile,
   newId,
@@ -215,6 +222,11 @@ function homeStatusHtml() {
   return "";
 }
 
+/** Below the input: prompt ideas once a model runs, the first-run panel until then. */
+function homeExtrasHtml() {
+  return wantsOnboarding() ? onboardingHtml() : suggestionsHtml();
+}
+
 /** Keep the home screen in step with the cluster without a full re-render. */
 export function updateHomeHeading() {
   const title = document.querySelector("#chat-content .ph-title");
@@ -222,6 +234,16 @@ export function updateHomeHeading() {
   title.innerHTML = homeTitleHtml();
   const status = document.querySelector("#chat-content .ph-desc");
   if (status) status.innerHTML = homeStatusHtml();
+  const extras = document.querySelector("#chat-content .ph-suggestions-inner");
+  const mode = wantsOnboarding() ? "onboarding" : "suggestions";
+  if (extras && extras.dataset.mode !== mode) {
+    extras.dataset.mode = mode;
+    extras.innerHTML = homeExtrasHtml();
+    filterSuggestions();
+  } else if (mode === "onboarding") {
+    updateOnboarding();
+  }
+  if (mode === "onboarding") refreshCatalog();
 }
 
 function homeHtml() {
@@ -242,7 +264,7 @@ function homeHtml() {
     `<div class="ph-desc">${homeStatusHtml()}</div>` +
     `<div class="ph-input">${messageInputHtml("How can I help you today?")}</div>` +
     `</div></div>` +
-    `<div class="ph-suggestions"><div class="ph-suggestions-inner">${suggestionsHtml()}</div></div>` +
+    `<div class="ph-suggestions"><div class="ph-suggestions-inner" data-mode="${wantsOnboarding() ? "onboarding" : "suggestions"}">${homeExtrasHtml()}</div></div>` +
     `</div></div>`
   );
 }
@@ -463,8 +485,10 @@ export function renderContent() {
   const textarea = content.querySelector("#chat-input");
   textarea.value = state.prompt;
   resizeInput(textarea);
-  if (home) filterSuggestions();
-  else {
+  if (home) {
+    filterSuggestions();
+    if (wantsOnboarding()) refreshCatalog();
+  } else {
     autoScroll = true;
     scrollToBottom();
   }
@@ -830,4 +854,5 @@ export function initChat() {
   container.addEventListener("submit", onSubmit);
   container.addEventListener("scroll", onScroll, true);
   bindCodeBlockActions(container, (text) => copyText(text, false));
+  initOnboarding(container);
 }

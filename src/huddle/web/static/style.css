@@ -4101,6 +4101,9 @@ input[type="checkbox"]:checked {
   }
 }
 
+/* First run (onboarding.js): below the input on the home screen, in the place
+   and type scale of the prompt suggestions, until a model runs in the cluster. */
+
 /* text-xs text-gray-500: the PC this model would run on, in the model menu */
 .model-item-node {
   margin-left: 8px;
@@ -4135,4 +4138,211 @@ input[type="checkbox"]:checked {
   border-radius: 9999px;
   background: var(--amber-500);
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.ob {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 32px;
+  text-align: left;
+}
+
+.ob-capacity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--gray-400);
+}
+
+.ob-link {
+  color: var(--gray-300);
+  text-decoration: underline;
+  text-decoration-color: var(--gray-700);
+  text-underline-offset: 3px;
+  transition: color 150ms var(--ease);
+}
+
+.ob-link:hover {
+  color: #fff;
+}
+
+.ob-capacity .ob-link {
+  margin-left: auto;
+}
+
+.ob-section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Suggestions.svelte's heading: mb-1 text-xs font-medium text-gray-400 */
+.ob-head {
+  margin: 0 12px 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--gray-400);
+}
+
+.ob-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The suggestion row: px-3 py-2 rounded-xl hover:bg-white/5 */
+.ob-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  transition: background-color 150ms var(--ease);
+}
+
+.ob-row:hover {
+  background: rgb(255 255 255 / 0.05);
+}
+
+.ob-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.ob-title {
+  font-weight: 500;
+  color: var(--gray-300);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ob-row:hover .ob-title {
+  color: var(--gray-200);
+}
+
+.ob-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-400);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ob-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+.ob-fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ob-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--gray-600);
+}
+
+.ob-fit-gpu .ob-dot {
+  background: var(--green-500);
+}
+
+.ob-fit-partial .ob-dot {
+  background: var(--amber-500);
+}
+
+.ob-fit-no {
+  color: var(--gray-600);
+}
+
+.ob-tested {
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--gray-850);
+  color: var(--gray-400);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.ob-end {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ws-button, the Workspace's own: text-xs font-medium px-3 py-1.5 rounded-xl bg-white text-black */
+.ob-button {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: #fff;
+  color: #000;
+  transition-property: var(--transition);
+  transition-duration: 150ms;
+}
+
+.ob-button:hover:not(:disabled) {
+  background: var(--gray-100);
+}
+
+.ob-button.muted {
+  background: var(--gray-850);
+  color: var(--gray-400);
+}
+
+.ob-button.muted:hover:not(:disabled) {
+  background: var(--gray-800);
+}
+
+.ob-button:disabled {
+  opacity: 0.5;
+}
+
+.ob-progress {
+  width: 112px;
+}
+
+.ob-empty,
+.ob-more {
+  padding: 0 12px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+.ob-error {
+  padding: 0 12px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--red-400);
+}
+
+@media (max-width: 640px) {
+  .ob-row {
+    align-items: flex-start;
+  }
+
+  .ob-sub {
+    white-space: normal;
+  }
 }
