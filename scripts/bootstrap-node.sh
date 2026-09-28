@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build llama.cpp for a Huddle node.
 #
-# Every node must build from the pinned commit in llamacpp.pin: llama.cpp's RPC
-# protocol performs a version handshake and rejects mismatched peers.
+# Most nodes need none of this: `huddle setup` installs upstream's prebuilt
+# release. Build from source only for what that does not cover (CUDA, another
+# libc). Build from the pinned commit in src/huddle/llamacpp.pin: llama.cpp's
+# RPC protocol performs a version handshake and rejects mismatched peers.
 #
 # Usage:
 #   scripts/bootstrap-node.sh              # Vulkan build (default)
@@ -16,8 +18,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=../llamacpp.pin
-source "$REPO_ROOT/llamacpp.pin"
+# shellcheck source=../src/huddle/llamacpp.pin
+source "$REPO_ROOT/src/huddle/llamacpp.pin"
 
 SRC_DIR="${HUDDLE_LLAMACPP_DIR:-$HOME/llama.cpp}"
 BACKEND="${HUDDLE_BACKEND:-vulkan}"

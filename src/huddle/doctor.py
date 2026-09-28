@@ -33,9 +33,9 @@ from huddle.discovery import discover
 from huddle.gguf import GGUFError, ModelInfo, read_gguf
 from huddle.hardware import NodeHardware, probe
 from huddle.llamacpp import LlamaCppError, binary_version, same_build, version_commit
+from huddle.pin import PIN_FILE, load_pin
 from huddle.process import tcp_is_open
 
-PIN_FILE = Path(__file__).resolve().parents[2] / "llamacpp.pin"
 GIB = 1024**3
 
 
@@ -89,14 +89,8 @@ def _size(num_bytes: int) -> str:
 
 def read_pin(path: Path = PIN_FILE) -> str | None:
     """The llama.cpp commit every node is meant to be built from."""
-    try:
-        for line in path.read_text().splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "LLAMACPP_REF" and value.strip():
-                return value.strip()
-    except OSError:
-        return None
-    return None
+    pin = load_pin(path)
+    return pin.ref if pin else None
 
 
 # -- local node ----------------------------------------------------------------

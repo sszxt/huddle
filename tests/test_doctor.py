@@ -24,8 +24,8 @@ from huddle.doctor import (
 from huddle.hardware import DeviceInfo, NodeHardware
 from tests.test_cluster import with_peer
 
-PIN = "4c9233c034fc450dcf34c7c0988aebe6da5cdf1a"
-SAME = "version: 0.4.1-dev (build 10975, commit 4c9233c03)"
+PIN = "987498f4592a76897863cf53711dce38380c082b"
+SAME = "version: 0.4.1-dev (build 10976, commit 987498f45)"
 OTHER = "version: 0.4.1-dev (build 10975, commit deadbeef)"
 CONSTRAINED = (
     "Available devices:\n"
@@ -183,13 +183,13 @@ async def test_peer_on_another_build_fails() -> None:
     async with agent_answering({"foreign": False}) as client:
         check = await check_peer(client, peer_report(OTHER), SAME)
     assert check.level is Level.FAIL
-    assert "4c9233c03" in check.summary and "deadbeef" in check.summary
+    assert "987498f45" in check.summary and "deadbeef" in check.summary
 
 
 async def test_peer_on_a_shallow_clone_of_the_same_commit_passes() -> None:
     async with agent_answering({"foreign": False}) as client:
         check = await check_peer(
-            client, peer_report(SAME), "version: 0.4.1-dev (build 1, commit 4c9233c)"
+            client, peer_report(SAME), "version: 0.4.1-dev (build 1, commit 987498f)"
         )
     assert check.level is Level.OK
 

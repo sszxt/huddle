@@ -1,0 +1,24 @@
+# The llama.cpp build this cluster is pinned to.
+#
+# Every node MUST run this exact build. llama.cpp's RPC protocol performs a
+# version handshake and refuses a peer whose major version differs, so a
+# mixed-build cluster fails at connect time with a version mismatch.
+#
+# `huddle setup` installs upstream's own prebuilt release, verified against the
+# checksums below. LLAMACPP_REF is that release's commit, so a node built from
+# source with scripts/bootstrap-node.sh (for CUDA, say) still matches.
+#
+# b10976 is commit 987498f, whose parent 4c9233c is the build the real cluster
+# was verified on; the only change between them is upstream's release workflow.
+#
+# To move the pin: update every value here, re-run `huddle setup` on every
+# node, and re-verify on hardware (placement, OOM detection, the GGUF type
+# table cross-check) before bringing the cluster back up.
+
+LLAMACPP_REPO=https://github.com/ggml-org/llama.cpp
+LLAMACPP_REF=987498f4592a76897863cf53711dce38380c082b
+LLAMACPP_RELEASE=b10976
+LLAMACPP_DATE=2026-09-15
+GGML_VERSION=0.24.0
+LLAMACPP_SHA256_VULKAN_X64=bf5c969d34ce1dad3a00088aeb3279714fd538b5b1149c01edac0bec7bfb8f49
+LLAMACPP_SHA256_VULKAN_ARM64=bbb89e4c3bda1fbdf47e277544e89ddfeff4a07711f16c3697fb7317272867cb

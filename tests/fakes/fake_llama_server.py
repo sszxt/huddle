@@ -44,9 +44,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from huddle.gguf import GGUFError, read_gguf
 
-# Same shape as the real build's output, at the pinned commit, so version checks
-# see what they would see on a node built from llamacpp.pin.
-FAKE_VERSION = "version: 0.4.1-dev (build 1, commit 4c9233c)"
+# The pinned prebuilt release's own output (b10976 on sameer), so version
+# checks see what they would see on a node installed by `huddle setup`.
+FAKE_VERSION = "version: 0.4.1-dev (build 10976, commit 987498f45)"
 
 DEFAULT_DEVICES = (
     "Available devices:\n"
