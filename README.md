@@ -90,12 +90,23 @@ no longer exercised here.
   yet run as a two-PC install on the real hardware.
 - **Web UI** — a chat front end at `/ui`, laid out after Open WebUI's chat
   screen: streaming chat against the cluster's OpenAI-compatible API, model
-  switching, chat history kept in the browser, and the model manager under
+  switching, per-user chat history (see Accounts), and the model manager under
   Workspace. A Cluster page maps every node live: addresses, CPU, memory, each
   GPU's VRAM/utilization/temperature/power, round-trip time from the head, and
   which layers sit on which device. Plain HTML, CSS and JS, no build step.
   Checked in a browser against the fake binaries only; not yet run against a
   live cluster.
+
+- **Accounts** — sign-in for the web UI, as Open WebUI does it: the first
+  account created is the admin; later sign-ups wait as *pending* until the
+  admin approves them in the Admin Panel, where the admin can also add, edit
+  and remove users, turn sign-ups off, or let new accounts in directly. Each
+  user's chat history is kept on the PC serving the page, in one SQLite file
+  (`~/.local/share/huddle/huddle.db`); every PC keeps its own accounts. Chats
+  a browser kept from before sign-in can be imported on first sign-in.
+  `accounts.enabled: false` returns to browser-only history with no sign-in.
+  Tested against the fakes and driven in a headless browser (sign-up,
+  approval, chat saved and reloaded, import); not yet run on a real node.
 
 More nodes add capacity, not speed: pipeline parallelism runs one stage at a
 time, and every node boundary costs a network round trip per token.
@@ -150,7 +161,15 @@ or guest Wi-Fi. The installer opens the ports to the local subnet only; bind
 `api.host: 127.0.0.1` to keep a PC from lending its GPU or serving its UI to
 others. A WireGuard/Tailscale overlay (`discovery.advertise`) adds encryption
 if the network is not otherwise trusted. Only chat requests (`/v1/*`) check
-`api.api_key`, which must then match on every PC; the web UI asks for it.
+`api.api_key`, which must then match on every PC; a signed-in web UI user
+needs no key.
+
+Web UI accounts keep people out of each other's chat history, not strangers
+out of the cluster: model loading and the node routes stay open to the
+network, and `/v1/*` stays open unless `api.api_key` is set. Passwords are
+stored as scrypt hashes and sessions by their hash, but the page is plain HTTP,
+so a password crosses the network unencrypted — another reason to keep Huddle
+on a network you trust.
 
 ## Tests
 
