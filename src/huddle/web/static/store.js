@@ -1,8 +1,10 @@
 // Shared UI state, browser persistence, and a tiny event bus.
 //
-// Chats live only in this browser's localStorage. Every access is wrapped:
-// storage can be blocked (private windows, strict settings) and the page must
-// still work, just without history.
+// Chats are kept by whoever `usePersistence` names: the signed-in user's
+// history on the server (history.js), or, with accounts off, this browser's
+// localStorage. Every localStorage access is wrapped: storage can be blocked
+// (private windows, strict settings) and the page must still work, just
+// without history.
 
 const CHATS_KEY = "huddle.chats";
 const SIDEBAR_KEY = "huddle.showSidebar";
@@ -31,6 +33,9 @@ export const isMobile = () => window.innerWidth < MOBILE_BREAKPOINT;
 
 export const state = {
   node: "",
+  // /api/auth/config, and who is signed in (null with accounts off).
+  accounts: null,
+  user: null,
   health: null,
   // Every PC's models: { file, node, node_id, size, local }.
   models: [],
@@ -69,8 +74,34 @@ export const nowSeconds = () => Math.floor(Date.now() / 1000);
 export const newId = () =>
   crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-export function saveChats() {
-  write(CHATS_KEY, state.chats);
+// Without accounts every change rewrites the whole list, as it always has.
+let persistence = {
+  save: () => write(CHATS_KEY, state.chats),
+  remove: () => write(CHATS_KEY, state.chats),
+};
+
+/** Keep chats somewhere else: `{ save(chat), remove(id) }`. */
+export function usePersistence(next) {
+  persistence = next;
+}
+
+/** Chats this browser kept before its user signed in. */
+export function localChats() {
+  return read(CHATS_KEY, []);
+}
+
+export function clearLocalChats() {
+  try {
+    localStorage.removeItem(CHATS_KEY);
+  } catch {
+    // Nothing to clear if storage is unavailable.
+  }
+}
+
+/** Persist a chat without moving it in the list, e.g. after a Controls change. */
+export function saveChat(chat) {
+  if (!chat || chat.temporary || !state.chats.includes(chat)) return;
+  persistence.save(chat);
 }
 
 /** Persist a chat after it changed. Temporary chats never touch storage. */
@@ -79,13 +110,13 @@ export function touchChat(chat) {
   chat.updated_at = nowSeconds();
   if (!state.chats.includes(chat)) state.chats.unshift(chat);
   state.chats.sort((a, b) => b.updated_at - a.updated_at);
-  saveChats();
+  persistence.save(chat);
   emit("chats");
 }
 
 export function deleteChat(id) {
   state.chats = state.chats.filter((chat) => chat.id !== id);
-  saveChats();
+  persistence.remove(id);
   emit("chats");
 }
 
@@ -93,7 +124,7 @@ export function renameChat(id, title) {
   const chat = state.chats.find((c) => c.id === id);
   if (!chat || !title.trim()) return;
   chat.title = title.trim();
-  saveChats();
+  persistence.save(chat);
   emit("chats");
 }
 

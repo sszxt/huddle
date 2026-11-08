@@ -127,6 +127,85 @@ export function confirmDialog({
   });
 }
 
+/**
+ * A dialog with several fields, in ConfirmDialog's frame.
+ *
+ * `fields`: [{ name, label, type = "text", value = "", placeholder = "", options }],
+ * where `options` ([{ value, label }]) makes a select. `submit(values)` runs on
+ * confirm; if it throws, its message shows in the dialog, which stays open. The
+ * promise resolves to what `submit` returned, or null if cancelled.
+ */
+export function formDialog({ title, message = "", fields, confirmLabel = "Save", cancelLabel = "Cancel", submit }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "dialog-overlay";
+    const control = (field) => {
+      const name = escapeHtml(field.name);
+      if (field.options) {
+        const options = field.options
+          .map(
+            (option) =>
+              `<option value="${escapeHtml(option.value)}"${option.value === field.value ? " selected" : ""}>` +
+              `${escapeHtml(option.label)}</option>`
+          )
+          .join("");
+        return `<select class="dialog-input dialog-select" name="${name}">${options}</select>`;
+      }
+      const autocomplete = field.type === "password" ? "new-password" : "off";
+      return (
+        `<input class="dialog-input" name="${name}" type="${escapeHtml(field.type ?? "text")}" ` +
+        `value="${escapeHtml(field.value ?? "")}" placeholder="${escapeHtml(field.placeholder ?? "")}" ` +
+        `autocomplete="${autocomplete}">`
+      );
+    };
+    overlay.innerHTML =
+      `<div class="dialog-panel fly-in" role="dialog" aria-modal="true"><form class="dialog-body" novalidate>` +
+      `<div class="dialog-title">${escapeHtml(title)}</div>` +
+      (message ? `<div class="dialog-message">${escapeHtml(message)}</div>` : "") +
+      `<div class="dialog-fields">` +
+      fields
+        .map((field) => `<label class="dialog-field"><div class="dialog-label">${escapeHtml(field.label)}</div>${control(field)}</label>`)
+        .join("") +
+      `</div><div class="dialog-error" hidden></div>` +
+      `<div class="dialog-actions">` +
+      `<button type="button" class="dialog-cancel">${escapeHtml(cancelLabel)}</button>` +
+      `<button type="submit" class="dialog-confirm">${escapeHtml(confirmLabel)}</button>` +
+      `</div></form></div>`;
+    const form = overlay.querySelector("form");
+    const error = overlay.querySelector(".dialog-error");
+    const confirmButton = overlay.querySelector(".dialog-confirm");
+    const close = (value) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") close(null);
+    };
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(form).entries());
+      confirmButton.disabled = true;
+      error.hidden = true;
+      try {
+        close(await submit(values));
+      } catch (failure) {
+        error.textContent = failure.message || String(failure);
+        error.hidden = false;
+      } finally {
+        confirmButton.disabled = false;
+      }
+    });
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) close(null);
+    });
+    overlay.querySelector(".dialog-cancel").addEventListener("click", () => close(null));
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(overlay);
+    overlay.querySelector(".dialog-input")?.focus();
+  });
+}
+
 // --- Dropdown menus (bits-ui DropdownMenu as Open WebUI uses it) ---
 
 let openMenuState = null;

@@ -5,6 +5,7 @@
 // own name and logo. No Open WebUI source or branding is included. Plain ES
 // modules against same-origin routes: no build step, no framework.
 
+import { initAdminPage, renderAdminPage, resetAdminPage } from "./admin.js";
 import {
   initChat,
   newChat,
@@ -15,7 +16,9 @@ import {
 } from "./chat.js";
 import { startPolling } from "./cluster.js";
 import { closeClusterPage, initClusterPage, openClusterPage, renderClusterPage } from "./clusterview.js";
+import { loadServerHistory, offerImport } from "./history.js";
 import { bindNavbar } from "./navbar.js";
+import { loadSession, renderAuthPage, renderPendingPage, renderUnavailablePage } from "./session.js";
 import { initSidebar, renderSidebar } from "./sidebar.js";
 import { isMobile, on, state } from "./store.js";
 import { initTooltips } from "./ui.js";
@@ -27,16 +30,19 @@ function parseRoute() {
   if (chat) return { name: "chat", id: decodeURIComponent(chat[1]) };
   if (path.startsWith("/workspace")) return { name: "workspace" };
   if (path.startsWith("/cluster")) return { name: "cluster" };
+  const admin = path.match(/^\/admin(?:\/(\w+))?/);
+  if (admin) return { name: "admin", tab: admin[1] ?? "users" };
   return { name: "home" };
 }
 
 // Pages that replace the chat view, and how to redraw each in place.
-const PAGES = { workspace: renderWorkspace, cluster: renderClusterPage };
+const PAGES = { workspace: renderWorkspace, cluster: renderClusterPage, admin: renderAdminPage };
+const PAGE_TITLES = { workspace: "Workspace", cluster: "Cluster", admin: "Admin Panel" };
 
 /** Open WebUI's page title: the chat title (cut at 30 characters) • name. */
 function updateTitle() {
-  if (state.route.name === "workspace" || state.route.name === "cluster") {
-    document.title = `${state.route.name === "workspace" ? "Workspace" : "Cluster"} • Huddle`;
+  if (state.route.name in PAGE_TITLES) {
+    document.title = `${PAGE_TITLES[state.route.name]} • Huddle`;
     return;
   }
   const title = state.current && !state.current.temporary ? state.current.title : "";
@@ -49,8 +55,17 @@ function route() {
   state.route = next;
   if (next.name !== "cluster") closeClusterPage();
 
+  if (next.name === "admin" && state.user?.role !== "admin") {
+    location.hash = "#/";
+    return;
+  }
+
   if (next.name === "workspace") {
     renderWorkspace();
+  } else if (next.name === "admin") {
+    // Fresh each visit: accounts change while the page is elsewhere.
+    if (previous !== "admin") resetAdminPage();
+    renderAdminPage();
   } else if (next.name === "cluster") {
     openClusterPage();
   } else if (next.name === "chat") {
@@ -87,6 +102,7 @@ function init() {
   initChat();
   initWorkspace();
   initClusterPage();
+  initAdminPage();
   bindNavbar(document.getElementById("chat-container"));
 
   on("new-chat", showNewChat);
@@ -138,4 +154,15 @@ function init() {
   startPolling();
 }
 
-init();
+/** Sign-in first: the chat app starts only for someone allowed to use it. */
+async function boot() {
+  const session = await loadSession();
+  if (session === "signin") return renderAuthPage();
+  if (session === "pending") return renderPendingPage();
+  if (session === "unavailable") return renderUnavailablePage();
+  if (session === "active") await loadServerHistory();
+  init();
+  if (session === "active") offerImport();
+}
+
+boot();

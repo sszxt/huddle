@@ -5,6 +5,7 @@
 import { renderReadOnlyMessages } from "./chat.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./markdown.js";
+import { openUserMenu } from "./session.js";
 import {
   deleteChat,
   emit,
@@ -57,6 +58,21 @@ function chatList() {
     .join("");
 }
 
+/** Who is signed in, with their menu; without accounts, this PC's name. */
+function footerUser() {
+  const user = state.user;
+  const name = user ? user.name : state.node || "";
+  const avatar = initialsImage(name || "Huddle");
+  const attrs = user
+    ? ` role="button" tabindex="0" data-action="user-menu" aria-label="User Menu"`
+    : "";
+  return (
+    `<div class="sb-user${user ? " sb-user-button" : ""}"${attrs}>` +
+    `<div class="sb-user-avatar"><img src="${avatar}" alt="" draggable="false"></div>` +
+    `<div class="sb-user-name">${escapeHtml(name)}</div></div>`
+  );
+}
+
 function sidebarHtml() {
   const nav = NAV_ITEMS.map(
     (item) =>
@@ -65,7 +81,6 @@ function sidebarHtml() {
       `<div class="sb-nav-icon">${item.icon()}</div>` +
       `<div class="sb-nav-label"><div>${item.label}</div></div></a></div>`
   ).join("");
-  const avatar = initialsImage(state.node || "Huddle");
   return (
     `<div class="sb-inner scrollbar-hidden">` +
     `<div class="sb-header">` +
@@ -82,10 +97,7 @@ function sidebarHtml() {
     `<div class="sb-folder-content"${state.chatsOpen ? "" : " hidden"}>` +
     `<div class="sb-chat-scroll scrollbar-hidden"><div class="sb-chat-list">${chatList()}</div></div>` +
     `</div></div></div>` +
-    `<div class="sb-footer"><div class="sb-footer-inner">` +
-    `<div class="sb-user"><div class="sb-user-avatar"><img src="${avatar}" alt="" draggable="false"></div>` +
-    `<div class="sb-user-name">${escapeHtml(state.node || "")}</div></div>` +
-    `</div></div>` +
+    `<div class="sb-footer"><div class="sb-footer-inner">${footerUser()}</div></div>` +
     `</div>`
   );
 }
@@ -104,8 +116,8 @@ function railHtml() {
     cell(icon("workspace", "size-4.5"), 'href="#/workspace" data-action="workspace"', "Workspace") +
     cell(icon("serverStack", "size-4.5"), 'href="#/cluster" data-action="cluster"', "Cluster") +
     `</div></div>` +
-    `<div><div class="rail-user"><div class="rail-button"><div class="rail-cell">` +
-    `<img src="${initialsImage(state.node || "Huddle")}" class="rail-avatar" alt=""></div></div></div></div>`
+    `<div><div class="rail-user"><div class="rail-button"${state.user ? ' role="button" data-action="user-menu" aria-label="User Menu"' : ""}>` +
+    `<div class="rail-cell"><img src="${initialsImage(state.user?.name || state.node || "Huddle")}" class="rail-avatar" alt=""></div></div></div></div>`
   );
 }
 
@@ -205,6 +217,10 @@ function onSidebarClick(event) {
     event.preventDefault();
     event.stopPropagation();
     chatMenu(target);
+  } else if (action === "user-menu") {
+    event.preventDefault();
+    event.stopPropagation();
+    openUserMenu(target);
   }
 }
 
@@ -347,6 +363,11 @@ export function initSidebar() {
   document.getElementById("sidebar-backdrop").addEventListener("mousedown", () => setShowSidebar(false));
 
   sidebar.addEventListener("keydown", (event) => {
+    if (event.target.dataset?.action === "user-menu" && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      openUserMenu(event.target);
+      return;
+    }
     if (!event.target.classList.contains("chat-title-input")) return;
     if (event.key === "Enter") finishRename(event.target, true);
     if (event.key === "Escape") finishRename(event.target, false);

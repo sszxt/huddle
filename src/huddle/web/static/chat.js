@@ -16,12 +16,13 @@ import {
   updateOnboarding,
   wantsOnboarding,
 } from "./onboarding.js";
+import { sessionEnded } from "./session.js";
 import {
   displayName,
   isMobile,
   newId,
   nowSeconds,
-  saveChats,
+  saveChat,
   setApiKey,
   state,
   touchChat,
@@ -452,7 +453,7 @@ export function renderControls() {
 
 /** Persist a Controls change without bumping the chat to the top of the list. */
 function saveParams() {
-  if (state.current && !state.current.temporary && state.chats.includes(state.current)) saveChats();
+  saveChat(state.current);
 }
 
 // --- View rendering ---
@@ -609,7 +610,10 @@ async function generate(chat, message) {
     const send = () =>
       api("/v1/chat/completions", { method: "POST", json: body, signal: controller.signal });
     let response = await send();
-    if (response.status === 401 && (await askApiKey())) response = await send();
+    // Signed in, a 401 means the sign-in ended (expired, or an admin changed
+    // the account); without accounts it means this server wants its API key.
+    if (response.status === 401 && state.user) sessionEnded();
+    else if (response.status === 401 && (await askApiKey())) response = await send();
     if (!response.ok) {
       message.error = await errorDetail(response);
     } else {

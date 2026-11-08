@@ -7,6 +7,7 @@
 import { isLoaded, switchModel } from "./cluster.js";
 import { icon } from "./icons.js";
 import { escapeHtml } from "./markdown.js";
+import { openUserMenu } from "./session.js";
 import { displayName, emit, isMobile, setShowSidebar, state, touchChat } from "./store.js";
 import { closeMenu, initialsImage, LOGO_URL, openMenu } from "./ui.js";
 
@@ -59,8 +60,9 @@ export function navbarHtml() {
     temporaryButton +
     `<button type="button" class="nav-button" data-action="toggle-controls" data-tooltip="Controls" aria-label="Controls">` +
     `<div class="nav-button-icon">${icon("adjustmentsHorizontal", "size-5", 1)}</div></button>` +
-    `<div class="nav-user"><div class="nav-user-inner"><span class="sr-only">User menu</span>` +
-    `<img src="${initialsImage(state.node || "Huddle")}" class="nav-avatar" alt="" draggable="false"></div></div>` +
+    `<div class="nav-user"${state.user ? ' role="button" tabindex="0" data-action="user-menu"' : ""}>` +
+    `<div class="nav-user-inner"><span class="sr-only">User menu</span>` +
+    `<img src="${initialsImage(state.user?.name || state.node || "Huddle")}" class="nav-avatar" alt="" draggable="false"></div></div>` +
     `</div></div></div></div>` +
     temporaryLabel
   );
@@ -164,6 +166,8 @@ export function bindNavbar(container) {
     } else if (action === "toggle-controls") {
       state.showControls = !state.showControls;
       emit("controls");
+    } else if (action === "user-menu") {
+      openUserMenu(target);
     }
   });
 }

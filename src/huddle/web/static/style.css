@@ -4346,3 +4346,570 @@ input[type="checkbox"]:checked {
     white-space: normal;
   }
 }
+
+/* --- Accounts (session.js, admin.js) ------------------------------------------
+   Sign-in after Open WebUI's routes/auth/+page.svelte; the wait for approval
+   after AccountPending.svelte; the Admin Panel after admin/users and
+   admin/settings. */
+
+/* w-full h-screen max-h-[100dvh] text-white relative bg-black */
+.auth {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+  color: #fff;
+  background: #000;
+  font-family: var(--font-sans);
+}
+
+/* fixed m-10 z-50: the logo in the top corner */
+.auth-logo {
+  position: fixed;
+  margin: 40px;
+  z-index: 50;
+}
+
+.auth-logo img {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+}
+
+/* min-h-screen w-full flex justify-center font-primary */
+.auth-center {
+  display: flex;
+  justify-content: center;
+  min-height: 100dvh;
+  width: 100%;
+  font-family: var(--font-primary);
+}
+
+/* w-full sm:max-w-md px-10 min-h-screen flex flex-col text-center my-auto */
+.auth-form {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+/* text-2xl font-medium */
+.auth-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 500;
+}
+
+/* mt-1 text-xs font-medium text-gray-500 */
+.auth-note {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+/* flex flex-col mt-4 */
+.auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+/* text-sm font-medium text-left mb-1 */
+.auth-label {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+/* my-0.5 w-full text-sm outline-hidden bg-transparent */
+.auth-input {
+  margin: 2px 0;
+  width: 100%;
+  font-size: 14px;
+  line-height: 20px;
+  background: transparent;
+  outline: none;
+  color: #fff;
+}
+
+.auth-input::placeholder {
+  color: var(--gray-600);
+}
+
+/* bg-gray-100/5 hover:bg-gray-100/10 text-gray-300 hover:text-white w-full
+   rounded-full font-medium text-sm py-2.5 mt-5 */
+.auth-submit {
+  margin-top: 20px;
+  width: 100%;
+  border-radius: 9999px;
+  padding: 10px 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--gray-300);
+  background: rgb(236 236 236 / 0.05);
+  transition-property: var(--transition);
+  transition-duration: 150ms;
+}
+
+.auth-submit:hover:not(:disabled) {
+  color: #fff;
+  background: rgb(236 236 236 / 0.1);
+}
+
+.auth-submit:disabled {
+  opacity: 0.5;
+}
+
+/* mt-4 text-sm text-center */
+.auth-alt {
+  margin-top: 16px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.auth-switch {
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+/* AccountPending.svelte: fixed w-full h-full flex z-999 bg-black/60 backdrop-blur-lg */
+.pending {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  z-index: 999;
+  background: rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(16px);
+  color: #fff;
+}
+
+/* m-auto pb-10 flex flex-col justify-center */
+.pending-inner {
+  margin: auto;
+  padding: 0 24px 40px;
+  max-width: 28rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+/* text-2xl font-medium */
+.pending-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 500;
+}
+
+/* mt-4 text-sm text-gray-200 */
+.pending-text {
+  margin-top: 16px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--gray-200);
+}
+
+.pending-text code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.pending-actions {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* px-6 py-2 rounded-full bg-white text-gray-800 font-medium text-sm */
+.pending-button {
+  padding: 8px 24px;
+  border-radius: 9999px;
+  background: #fff;
+  color: var(--gray-800);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  transition-property: var(--transition);
+  transition-duration: 150ms;
+}
+
+.pending-button:hover {
+  background: var(--gray-100);
+}
+
+/* text-xs underline */
+.pending-link {
+  font-size: 12px;
+  line-height: 16px;
+  text-decoration: underline;
+}
+
+/* formDialog in ui.js: labelled fields inside ConfirmDialog's frame */
+.dialog-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.dialog-message + .dialog-fields {
+  margin-top: 16px;
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+}
+
+/* mb-0.5 text-xs text-gray-500 */
+.dialog-label {
+  margin-bottom: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+.dialog-field .dialog-input {
+  margin-top: 0;
+}
+
+.dialog-select {
+  appearance: auto;
+}
+
+.dialog-error {
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--red-400);
+}
+
+.dialog-confirm:disabled {
+  opacity: 0.5;
+}
+
+/* The sidebar's user row opens the user menu. */
+.sb-user-button {
+  cursor: pointer;
+}
+
+/* UserMenu.svelte: w-full max-w-[240px] rounded-2xl px-1 py-1 border border-gray-800 */
+.user-dropdown {
+  width: 240px;
+  border-radius: 16px;
+  padding: 4px;
+  border: 1px solid var(--gray-800);
+}
+
+.user-menu-head {
+  padding: 8px 12px 6px;
+  min-width: 0;
+}
+
+.user-menu-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu-email {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Admin Panel tabs: the selected one white, the rest gray-500 */
+.ad-tab {
+  color: var(--gray-500);
+}
+
+.ad-tab:hover,
+.ad-tab-active {
+  color: #fff;
+}
+
+.ad-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.ad-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ad-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  color: var(--gray-500);
+}
+
+.ad-search-input {
+  width: 12rem;
+  font-size: 14px;
+  line-height: 20px;
+  padding: 4px 0;
+  background: transparent;
+  outline: none;
+  color: var(--gray-100);
+}
+
+/* p-2 rounded-xl hover:bg-gray-850 */
+.ad-add,
+.ad-icon-button {
+  padding: 8px;
+  border-radius: 12px;
+  color: var(--gray-300);
+  transition-property: var(--transition);
+  transition-duration: 150ms;
+}
+
+.ad-add:hover,
+.ad-icon-button:hover {
+  background: var(--gray-850);
+  color: #fff;
+}
+
+.ad-banner {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--gray-200);
+  background: rgb(245 158 11 / 0.12);
+}
+
+.ad-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+/* w-full text-sm text-left text-gray-400 */
+.ad-table {
+  width: 100%;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  color: var(--gray-400);
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+/* text-xs uppercase bg-gray-850 */
+.ad-table th {
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--gray-400);
+  background: var(--gray-850);
+}
+
+.ad-table th:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.ad-table th:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.ad-table td {
+  padding: 6px 12px;
+}
+
+.ad-row {
+  border-bottom: 1px solid var(--gray-850);
+}
+
+.ad-row:last-child {
+  border-bottom: none;
+}
+
+/* The role, as Open WebUI's Badge: sky admin, green user, gray pending */
+.ad-role {
+  appearance: none;
+  cursor: pointer;
+  padding: 2px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  text-transform: uppercase;
+  outline: none;
+}
+
+.ad-role option {
+  color: #fff;
+  background: var(--gray-850);
+  text-transform: none;
+}
+
+.ad-role-admin {
+  color: oklch(90.1% 0.058 230.902);
+  background: rgb(14 165 233 / 0.2);
+}
+
+.ad-role-user {
+  color: oklch(92.5% 0.084 155.995);
+  background: rgb(34 197 94 / 0.2);
+}
+
+.ad-role-pending {
+  color: var(--gray-200);
+  background: rgb(155 155 155 / 0.2);
+}
+
+.ad-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ad-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+}
+
+.ad-name {
+  font-weight: 500;
+  color: #fff;
+}
+
+.ad-you {
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--gray-400);
+  background: var(--gray-850);
+}
+
+.ad-muted {
+  color: var(--gray-400);
+}
+
+.ad-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.ad-settings {
+  max-width: 42rem;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* mb-2.5 text-base font-medium */
+.ad-section-title {
+  margin-bottom: 10px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+/* mb-2.5 flex w-full justify-between */
+.ad-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+/* self-center text-xs font-medium */
+.ad-setting-name {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.ad-setting-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--gray-500);
+}
+
+/* bg-gray-900 w-fit rounded-sm px-2 text-xs outline-hidden text-right */
+.ad-select {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: right;
+  color: var(--gray-100);
+  background: var(--gray-900);
+  outline: none;
+}
+
+/* Switch.svelte: h-[1.125rem] w-8 rounded-full, thumb 0.75rem */
+.ad-switch {
+  flex-shrink: 0;
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9999px;
+  background: rgb(155 155 155 / 0.3);
+  transition: background 150ms var(--ease);
+}
+
+.ad-switch.on {
+  background: var(--green-500);
+}
+
+.ad-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #fff;
+  transition: transform 150ms var(--ease);
+}
+
+.ad-switch.on .ad-switch-thumb {
+  transform: translateX(14px);
+}
+
+@media (max-width: 640px) {
+  .ad-search-input {
+    width: 8rem;
+  }
+
+  .auth-form {
+    padding: 0 24px;
+  }
+}
