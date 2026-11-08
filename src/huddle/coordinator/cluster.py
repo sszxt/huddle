@@ -17,7 +17,7 @@ import httpx
 from huddle.config import HuddleConfig, PeerConfig
 from huddle.coordinator.planner import PlacementDevice
 from huddle.discovery import DiscoveredPeer, discover
-from huddle.hardware import NodeHardware
+from huddle.hardware import DeviceInfo, NodeHardware
 from huddle.llamacpp import same_build
 
 log = logging.getLogger("huddle.cluster")
@@ -144,6 +144,17 @@ def local_llamacpp_version(config: HuddleConfig) -> str | None:
         return None
 
 
+def _free_mib(device: DeviceInfo) -> int:
+    """Memory to plan with: what is free, or the total when free is unknown.
+
+    A device that really has nothing free reports 0, and that must stay 0: falling
+    back to the total on any falsy value would hand a full GPU a share of the model.
+    """
+    if device.free_mib is not None:
+        return device.free_mib
+    return device.total_mib or 0
+
+
 def build_device_list(
     local: NodeHardware, reports: list[PeerReport]
 ) -> tuple[list[PlacementDevice], list[str]]:
@@ -168,7 +179,7 @@ def build_device_list(
                     id=f"RPC{len(remote)}",
                     name=device.name,
                     node=report.peer.name,
-                    free_mib=device.free_mib or device.total_mib or 0,
+                    free_mib=_free_mib(device),
                     unified_memory=device.unified_memory,
                     is_rpc=True,
                 )
@@ -179,7 +190,7 @@ def build_device_list(
             id=device.id,
             name=device.name,
             node=local.name,
-            free_mib=device.free_mib or device.total_mib or 0,
+            free_mib=_free_mib(device),
             unified_memory=device.unified_memory,
             is_rpc=False,
         )

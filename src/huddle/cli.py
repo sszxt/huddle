@@ -239,10 +239,11 @@ def plan(
     """Show how layers would be split across this cluster."""
     import asyncio
 
-    from huddle.coordinator.cluster import build_device_list, query_peers
-    from huddle.coordinator.planner import plan_placement
+    from huddle.coordinator.cluster import query_peers
+    from huddle.coordinator.service import place
     from huddle.gguf import GGUFError, read_gguf
     from huddle.hardware import probe
+    from huddle.process import ProcessError
 
     settings = _load(config)
     n_ctx = ctx or settings.backend.ctx_size
@@ -262,18 +263,11 @@ def plan(
                 f"peer {report.peer.name} unreachable: {report.error}", fg=typer.colors.YELLOW
             )
 
-    devices, endpoints = build_device_list(local, reports)
-    if not devices:
-        typer.secho("no devices found", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-
-    result = plan_placement(
-        info,
-        devices,
-        n_ctx=n_ctx,
-        headroom=settings.planner.headroom,
-        use_unified_memory=settings.planner.use_unified_memory,
-    )
+    try:
+        result, endpoints = place(settings, info, local, reports, n_ctx=n_ctx)
+    except ProcessError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
     typer.echo(f"{info.name or info.path.name}  [{info.architecture}, {info.quantization}]")
     typer.echo(f"  {info.n_layers} layers, {result.per_layer_mib:,.1f} MiB each at ctx {n_ctx:,}")

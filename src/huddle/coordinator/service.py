@@ -846,6 +846,26 @@ def plan_cluster(
     Separate from gathering so a caller that has the peer reports already —
     `huddle doctor` — can plan without browsing the network a second time.
     """
+    plan, endpoints = place(config, info, local, reports, n_ctx=n_ctx, extra_reserve=extra_reserve)
+    result = _to_cluster_plan(info, plan, endpoints, reports)
+    result.extra_reserve_mib = dict(extra_reserve or {})
+    return result
+
+
+def place(
+    config: HuddleConfig,
+    info: ModelInfo,
+    local: NodeHardware,
+    reports: list[PeerReport],
+    *,
+    n_ctx: int,
+    extra_reserve: Mapping[str, float] | None = None,
+) -> tuple[Plan, list[str]]:
+    """The placement for this cluster and the ``--rpc`` endpoints it needs.
+
+    The one path from gathered hardware to a plan, so that what ``huddle plan``
+    prints is what a start would use.
+    """
     reachable = [report for report in reports if report.reachable]
     devices, endpoints = build_device_list(local, reachable)
     if not devices:
@@ -867,10 +887,7 @@ def plan_cluster(
     if len(active) != len(reachable):
         devices, endpoints = build_device_list(local, active)
         plan = _plan_for(config, info, devices, n_ctx, extra_reserve)
-
-    result = _to_cluster_plan(info, plan, endpoints, reports)
-    result.extra_reserve_mib = dict(extra_reserve or {})
-    return result
+    return plan, endpoints
 
 
 def _plan_for(
@@ -937,4 +954,11 @@ def _to_cluster_plan(
     )
 
 
-__all__ = ["ClusterPlan", "ClusterService", "ClusterStatus", "DevicePlacement", "PlacementDevice"]
+__all__ = [
+    "ClusterPlan",
+    "ClusterService",
+    "ClusterStatus",
+    "DevicePlacement",
+    "PlacementDevice",
+    "place",
+]
