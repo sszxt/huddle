@@ -241,6 +241,21 @@ class ApiConfig(Model):
     api_key: str | None = None
 
 
+class AccountsConfig(Model):
+    """Sign-in for the web UI, with each person's chat history kept on this node.
+
+    Accounts belong to this node alone: every node keeps its own. Off, the web
+    UI works as it did before accounts: anyone who can reach it may chat, and
+    history stays in each browser.
+    """
+
+    enabled: bool = True
+    # One SQLite file for users, sessions and chats.
+    db: Path = Field(default_factory=paths.default_accounts_db)
+    # How long a sign-in lasts before the browser must sign in again.
+    session_days: float = Field(default=30.0, gt=0)
+
+
 class HuddleConfig(Model):
     """Top-level configuration for one node."""
 
@@ -250,6 +265,7 @@ class HuddleConfig(Model):
     backend: BackendConfig = Field(default_factory=BackendConfig)
     rpc: RpcConfig = Field(default_factory=RpcConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    accounts: AccountsConfig = Field(default_factory=AccountsConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     supervisor: SupervisorConfig = Field(default_factory=SupervisorConfig)

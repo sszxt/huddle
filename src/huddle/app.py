@@ -22,6 +22,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from huddle import __version__, paths
+from huddle.accounts.app import Accounts
+from huddle.accounts.app import build_router as build_accounts_router
 from huddle.agent.app import build_router as build_agent_router
 from huddle.agent.service import BackendService
 from huddle.api.app import build_router as build_api_router
@@ -69,6 +71,7 @@ def create_app(config: HuddleConfig, *, lan_factory: LanFactory | None = None) -
         service.busy = cluster.busy_reason
     downloads = DownloadService(config.models.dir)
     client = make_client()
+    accounts = Accounts(config.accounts) if config.accounts.enabled else None
 
     def report() -> NodeReport:
         status = cluster.status()
@@ -100,6 +103,8 @@ def create_app(config: HuddleConfig, *, lan_factory: LanFactory | None = None) -
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(OSError):
             config.models.dir.mkdir(parents=True, exist_ok=True)
+        if accounts is not None:
+            await accounts.open()
         advertiser.llamacpp_version = await asyncio.to_thread(cluster.llamacpp_version)
         if membership is not None:
             # Advertise before starting any model: a peer that comes up while
@@ -124,15 +129,19 @@ def create_app(config: HuddleConfig, *, lan_factory: LanFactory | None = None) -
                 await membership.stop()
             await downloads.cancel()
             await client.aclose()
+            if accounts is not None:
+                await accounts.close()
 
     app = FastAPI(title="Huddle", version=__version__, lifespan=lifespan)
     app.state.service = service
     app.state.cluster = cluster
     app.state.membership = membership
     app.state.identity = identity
+    app.state.accounts = accounts
     app.include_router(build_agent_router(service, report))
     app.include_router(build_cluster_router(cluster, downloads))
-    app.include_router(build_api_router(service, client, cluster))
+    app.include_router(build_api_router(service, client, cluster, accounts))
+    app.include_router(build_accounts_router(accounts))
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:

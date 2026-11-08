@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from huddle.accounts.app import Accounts, bearer_matches
 from huddle.agent.service import BackendService
 from huddle.coordinator.service import FORWARDED_HEADER, ClusterService
 
@@ -37,17 +38,20 @@ def build_router(
     service: BackendService,
     client: httpx.AsyncClient,
     cluster: ClusterService | None = None,
+    accounts: Accounts | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["openai"])
 
-    def check_auth(request: Request) -> None:
+    async def check_auth(request: Request) -> None:
+        """The API key, when one is set; a signed-in web UI user counts too."""
         expected = service.config.api.api_key
-        if not expected:
+        if not expected or bearer_matches(request, expected):
             return
-        header = request.headers.get("authorization", "")
-        token = header.removeprefix("Bearer ").strip()
-        if token != expected:
-            raise HTTPException(status_code=401, detail="invalid api key")
+        if accounts is not None:
+            user = await accounts.user(request)
+            if user is not None and user.active:
+                return
+        raise HTTPException(status_code=401, detail="invalid api key")
 
     def target(request: Request) -> tuple[str, dict[str, str]]:
         """Where to send a request: this node's backend, or the serving node.
@@ -67,7 +71,12 @@ def build_router(
             head = cluster.membership.head()
         if head is not None and head.report is not None and not head.report.starting:
             headers = {FORWARDED_HEADER: "1"}
-            if "authorization" in request.headers:
+            # This node has already checked the caller. Pass the key on rather
+            # than the caller's own credentials: a sign-in belongs to this node,
+            # and the key is the same on every node.
+            if service.config.api.api_key:
+                headers["authorization"] = f"Bearer {service.config.api.api_key}"
+            elif "authorization" in request.headers:
                 headers["authorization"] = request.headers["authorization"]
             return f"http://{head.host}:{head.port}", headers
         if head is not None:
@@ -129,7 +138,7 @@ def build_router(
 
     @router.get("/v1/models")
     async def models(request: Request) -> Response:
-        check_auth(request)
+        await check_auth(request)
         base, headers = target(request)
         upstream = await client.get(f"{base}/v1/models", headers=headers)
         return Response(
@@ -151,7 +160,7 @@ def build_router(
         return await _proxy(request, "/v1/embeddings")
 
     async def _proxy(request: Request, path: str) -> Response:
-        check_auth(request)
+        await check_auth(request)
         base, headers = target(request)
 
         try:

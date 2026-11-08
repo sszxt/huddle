@@ -43,6 +43,11 @@ def default_models_dir() -> Path:
     return data_dir() / "models"
 
 
+def default_accounts_db() -> Path:
+    """Users, sign-in sessions and chat history: data, not state, so it is kept."""
+    return data_dir() / "huddle.db"
+
+
 def llamacpp_root() -> Path:
     """Parent of every installed llama.cpp release, one directory each."""
     return data_dir() / "llama.cpp"
@@ -88,6 +93,7 @@ __all__ = [
     "RPC_SERVER_NAMES",
     "config_dir",
     "data_dir",
+    "default_accounts_db",
     "default_config_file",
     "default_models_dir",
     "find_llama_server",

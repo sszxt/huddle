@@ -85,6 +85,16 @@ api:
   port: 8000
   api_key: null             # checked on /v1/*; must match on every PC
 
+# Sign-in for the web UI, and each person's chat history, kept on this PC.
+# The first account created is the admin; later sign-ups wait for the admin
+# to approve them (both adjustable in the UI's Admin Panel). Each PC keeps its
+# own accounts. Off, anyone on the network can chat and history stays in each
+# browser, as before accounts existed.
+accounts:
+  enabled: true
+  # db: /srv/huddle/huddle.db   # default: ~/.local/share/huddle/huddle.db
+  session_days: 30          # how long a sign-in lasts
+
 # Finding the other PCs on the LAN (mDNS).
 discovery:
   enabled: true
