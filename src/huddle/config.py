@@ -64,6 +64,10 @@ class NodeConfig(Model):
     state_dir: Path | None = None
 
 
+class InvalidModelName(ValueError):
+    """A model named in a request that is not a plain GGUF file in the models directory."""
+
+
 class ModelsConfig(Model):
     """Where GGUF files live on this node.
 
@@ -73,6 +77,25 @@ class ModelsConfig(Model):
 
     dir: Path = Field(default_factory=paths.default_models_dir)
     default: str | None = None
+
+    def check_name(self, name: str | None) -> None:
+        """Refuse a model name from a request unless it is a plain file in ``dir``.
+
+        Whoever can reach a node's port can name a model, so a request may not
+        reach outside the models directory with an absolute path or ``..``.
+        ``resolve`` stays permissive because the config file and the local CLI
+        are trusted and legitimately point at files elsewhere; the configured
+        default is accepted as written for the same reason. Call this where a
+        name arrives from the network.
+        """
+        if not name or name == self.default:
+            return
+        plain = "/" not in name and "\\" not in name and "\0" not in name
+        if not plain or name in (".", "..") or not name.lower().endswith(".gguf"):
+            raise InvalidModelName(
+                f"{name!r} is not a model file name: give the name of a .gguf file "
+                "in the models directory, with no path"
+            )
 
     def resolve(self, name: str | None = None) -> Path:
         """Return the absolute path of a model by file name."""

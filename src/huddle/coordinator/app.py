@@ -10,15 +10,17 @@ a request that has already been passed on once, so none is passed on twice.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import time
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from huddle import catalog, hfhub
+from huddle.config import InvalidModelName
 from huddle.coordinator.downloads import AlreadyDownloading, DownloadService, DownloadStatus
 from huddle.coordinator.overview import OverviewService
 from huddle.coordinator.service import (
@@ -57,9 +59,31 @@ class RepoFilesResponse(BaseModel):
     files: list[hfhub.HFFile]
 
 
+_REPO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
+
+
 class DownloadRequest(BaseModel):
     repo_id: str
     filename: str
+
+    @field_validator("repo_id")
+    @classmethod
+    def _check_repo(cls, value: str) -> str:
+        if not _REPO_ID.match(value):
+            raise ValueError("repo_id must look like 'owner/name'")
+        return value
+
+    @field_validator("filename")
+    @classmethod
+    def _check_filename(cls, value: str) -> str:
+        # A path inside the repo is fine ("Q4_K_M/model.gguf"); one that climbs
+        # out of it, or is absolute, is not.
+        parts = value.replace("\\", "/").split("/")
+        if value.startswith(("/", "\\")) or ".." in parts or "\0" in value:
+            raise ValueError("filename must be a relative path inside the repo")
+        if not value.lower().endswith(".gguf"):
+            raise ValueError("only .gguf files can be downloaded")
+        return value
 
 
 class ModelEntry(BaseModel):
@@ -102,6 +126,13 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
     router = APIRouter(prefix="/cluster", tags=["cluster"])
     overview = OverviewService(service)
     remote_models: dict[str, Any] = {"at": 0.0, "entries": []}
+
+    def checked(name: str | None) -> None:
+        """Refuse a model name that reaches outside the models directory."""
+        try:
+            service.config.models.check_name(name)
+        except InvalidModelName as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def remote_head(request: Request) -> Member | None:
         """The other node to pass this request to, if one is serving."""
@@ -172,6 +203,7 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
 
         Always from this node's point of view, as the head it would become.
         """
+        checked(model)
         try:
             return await service.build_plan(model, n_ctx=ctx)
         except (ProcessError, GGUFError, ValueError, OSError) as exc:
@@ -180,6 +212,7 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
     @router.post("/start")
     async def start(request: StartRequest | None = None) -> ClusterStatus:
         model = request.model if request else None
+        checked(model)
         try:
             if service.membership is None:
                 return await service.start(model)
@@ -287,6 +320,7 @@ def build_router(service: ClusterService, downloads: DownloadService) -> APIRout
         """Serve a model, from the node that holds it, replanning the split for it."""
         if not body.model:
             raise HTTPException(status_code=422, detail="model is required")
+        checked(body.model)
         target = body.node_id
         if target and target != service.identity.id and service.membership is not None:
             member = service.membership.by_id(target)

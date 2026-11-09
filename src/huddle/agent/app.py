@@ -25,7 +25,7 @@ from huddle.agent.service import (
     Owner,
     RpcStatus,
 )
-from huddle.config import HuddleConfig
+from huddle.config import HuddleConfig, InvalidModelName
 from huddle.discovery import ROLE_WORKER, Advertiser, load_identity
 from huddle.hardware import NodeHardware
 from huddle.membership import NodeReport, ReportProvider
@@ -93,8 +93,13 @@ def build_router(service: BackendService, report: ReportProvider | None = None) 
 
     @router.post("/backend/start")
     async def backend_start(request: StartRequest | None = None) -> BackendStatus:
+        model = request.model if request else None
         try:
-            return await service.start(request.model if request else None)
+            service.config.models.check_name(model)
+        except InvalidModelName as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            return await service.start(model)
         except (ProcessError, ValueError) as exc:
             # The child's last log lines are usually the real explanation.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
