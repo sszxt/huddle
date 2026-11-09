@@ -12,12 +12,13 @@ both hops keeps a stream a stream.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from huddle.accounts.app import Accounts, bearer_matches
 from huddle.agent.service import BackendService
@@ -28,6 +29,60 @@ from huddle.coordinator.service import FORWARDED_HEADER, ClusterService
 PROXY_TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 
 PROXIED_POST_PATHS = ("/v1/chat/completions", "/v1/completions", "/v1/embeddings")
+
+# How soon a caller should try again while the cluster is bringing a model back.
+RETRY_AFTER_SECONDS = 5
+
+
+class ProxyError(Exception):
+    """The cluster cannot answer this request right now.
+
+    Raised instead of letting the failure surface as a bare 500. The response
+    carries OpenAI's error shape (``error.message``/``type``/``code``), which
+    the official SDKs read, and ``detail``, which Huddle's own web UI reads.
+    """
+
+    def __init__(
+        self,
+        status: int,
+        message: str,
+        *,
+        code: str,
+        retry_after: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+        self.code = code
+        self.retry_after = retry_after
+
+
+async def proxy_error_response(request: Request, exc: Exception) -> JSONResponse:
+    """Render a ``ProxyError``; register it with ``app.add_exception_handler``."""
+    assert isinstance(exc, ProxyError)
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(
+        {
+            "detail": exc.message,
+            "error": {"message": exc.message, "type": "server_error", "code": exc.code},
+        },
+        status_code=exc.status,
+        headers=headers,
+    )
+
+
+def _stream_error(exc: Exception) -> bytes:
+    """The tail of an event stream whose upstream died after it had started.
+
+    The 200 and some tokens have already reached the caller, so a status code
+    is no longer possible. An error event and a terminator are: without them
+    the stream just stops, and a client cannot tell a finished reply from a
+    cut-off one.
+    """
+    message = f"the model server stopped responding mid-reply ({type(exc).__name__})"
+    event = {"error": {"message": message, "type": "server_error", "code": "upstream_lost"}}
+    # The blank line first closes any event the upstream was part-way through.
+    return f"\n\ndata: {json.dumps(event)}\n\ndata: [DONE]\n\n".encode()
 
 
 def make_client() -> httpx.AsyncClient:
@@ -80,13 +135,43 @@ def build_router(
                 headers["authorization"] = request.headers["authorization"]
             return f"http://{head.host}:{head.port}", headers
         if head is not None:
-            raise HTTPException(
-                status_code=503, detail=f"{head.display} is still loading the model"
+            raise ProxyError(
+                503,
+                f"{head.display} is still loading the model",
+                code="model_loading",
+                retry_after=RETRY_AFTER_SECONDS * 2,
             )
-        raise HTTPException(
-            status_code=503,
-            detail="the backend is not running: no model is loaded; pick one in the web UI "
+        raise ProxyError(
+            503,
+            "the backend is not running: no model is loaded; pick one in the web UI "
             "or POST /cluster/model",
+            code="no_model_loaded",
+        )
+
+    def upstream_failure(exc: Exception) -> ProxyError:
+        """Why a call to the model server failed, as the caller should hear it.
+
+        A cluster that is meant to be up but is down (a worker died, the
+        supervisor is restarting it) says so with a Retry-After: the next try
+        a few seconds on usually works. Anything else is a bad gateway.
+        """
+        if isinstance(exc, httpx.TimeoutException):
+            return ProxyError(
+                504, "the model server did not answer in time", code="upstream_timeout"
+            )
+        if cluster is not None:
+            status = cluster.status()
+            if status.degraded or status.starting:
+                return ProxyError(
+                    503,
+                    "the cluster is restarting its model server; try again shortly",
+                    code="cluster_recovering",
+                    retry_after=RETRY_AFTER_SECONDS,
+                )
+        return ProxyError(
+            502,
+            f"the model server could not be reached ({type(exc).__name__})",
+            code="upstream_unavailable",
         )
 
     def remote_health() -> dict[str, Any] | None:
@@ -140,7 +225,10 @@ def build_router(
     async def models(request: Request) -> Response:
         await check_auth(request)
         base, headers = target(request)
-        upstream = await client.get(f"{base}/v1/models", headers=headers)
+        try:
+            upstream = await client.get(f"{base}/v1/models", headers=headers)
+        except httpx.HTTPError as exc:
+            raise upstream_failure(exc) from exc
         return Response(
             content=upstream.content,
             status_code=upstream.status_code,
@@ -170,7 +258,10 @@ def build_router(
 
         url = f"{base}{path}"
         if not payload.get("stream"):
-            upstream = await client.post(url, json=payload, headers=headers)
+            try:
+                upstream = await client.post(url, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                raise upstream_failure(exc) from exc
             return Response(
                 content=upstream.content,
                 status_code=upstream.status_code,
@@ -180,15 +271,18 @@ def build_router(
         # Open the stream before returning, so an upstream error still reaches
         # the caller as a real status code rather than as a 200 full of nothing.
         upstream_request = client.build_request("POST", url, json=payload, headers=headers)
-        upstream_response = await client.send(upstream_request, stream=True)
-        if upstream_response.status_code >= 400:
-            body = await upstream_response.aread()
-            await upstream_response.aclose()
-            return Response(
-                content=body,
-                status_code=upstream_response.status_code,
-                media_type="application/json",
-            )
+        try:
+            upstream_response = await client.send(upstream_request, stream=True)
+            if upstream_response.status_code >= 400:
+                body = await upstream_response.aread()
+                await upstream_response.aclose()
+                return Response(
+                    content=body,
+                    status_code=upstream_response.status_code,
+                    media_type="application/json",
+                )
+        except httpx.HTTPError as exc:
+            raise upstream_failure(exc) from exc
 
         return StreamingResponse(
             _forward_stream(upstream_response),
@@ -209,5 +303,7 @@ async def _forward_stream(upstream: httpx.Response) -> AsyncIterator[bytes]:
     try:
         async for chunk in upstream.aiter_raw():
             yield chunk
+    except httpx.HTTPError as exc:
+        yield _stream_error(exc)
     finally:
         await upstream.aclose()

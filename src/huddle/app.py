@@ -26,8 +26,8 @@ from huddle.accounts.app import Accounts
 from huddle.accounts.app import build_router as build_accounts_router
 from huddle.agent.app import build_router as build_agent_router
 from huddle.agent.service import BackendService
+from huddle.api.app import ProxyError, make_client, proxy_error_response
 from huddle.api.app import build_router as build_api_router
-from huddle.api.app import make_client
 from huddle.config import HuddleConfig
 from huddle.coordinator.app import build_router as build_cluster_router
 from huddle.coordinator.downloads import DownloadService
@@ -133,6 +133,7 @@ def create_app(config: HuddleConfig, *, lan_factory: LanFactory | None = None) -
                 await accounts.close()
 
     app = FastAPI(title="Huddle", version=__version__, lifespan=lifespan)
+    app.add_exception_handler(ProxyError, proxy_error_response)
     app.state.service = service
     app.state.cluster = cluster
     app.state.membership = membership
