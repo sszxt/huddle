@@ -121,6 +121,8 @@ async def test_the_first_account_is_the_admin(browsers: Clients) -> None:
         "available": True,
         "signup_enabled": True,
         "first_user": True,
+        # httpx's ASGI transport connects from 127.0.0.1: the PC itself.
+        "setup_code_required": False,
     }
 
     response = await sign_up(client, "Admin@LAN ", "Admin")

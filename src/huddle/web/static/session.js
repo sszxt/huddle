@@ -52,9 +52,14 @@ function field(name, label, type, placeholder, autocomplete) {
 function authHtml(mode) {
   const config = state.accounts;
   const signup = mode === "signup";
+  const needsCode = signup && config.first_user && config.setup_code_required;
   const note = config.first_user
     ? `<div class="auth-note">ⓘ This first account becomes the admin, who approves everyone who signs up after. ` +
-      `Accounts and chats stay on this PC.</div>`
+      `Accounts and chats stay on this PC.` +
+      (needsCode
+        ? ` Because you are not on that PC, enter the setup code it shows: run <code>huddle admin-code</code> there.`
+        : "") +
+      `</div>`
     : "";
   let switcher = "";
   if (!config.first_user && config.signup_enabled) {
@@ -70,6 +75,7 @@ function authHtml(mode) {
     (signup ? field("name", "Name", "text", "Enter Your Full Name", "name") : "") +
     field("email", "Email", "email", "Enter Your Email", "email") +
     field("password", "Password", "password", "Enter Your Password", signup ? "new-password" : "current-password") +
+    (needsCode ? field("setup_code", "Setup code", "text", "XXXX-XXXX", "off") : "") +
     `</div>` +
     `<button type="submit" class="auth-submit">${signup ? "Create Account" : "Sign in"}</button>` +
     (switcher ? `<div class="auth-alt">${switcher}</div>` : "") +

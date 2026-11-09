@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -100,6 +101,31 @@ class AccountError(Exception):
         self.status = status
 
 
+class SetupCodeError(AccountError):
+    """The first account was asked for from another device without the right setup code."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            403,
+            "the first account needs the setup code from the PC running Huddle: "
+            "run `huddle admin-code` there, or create the account from that PC",
+        )
+
+
+# No 0/O/1/I/L: the code is read off a terminal and typed into a form.
+SETUP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+SETUP_CODE_LENGTH = 8
+
+
+def _new_setup_code() -> str:
+    raw = "".join(secrets.choice(SETUP_ALPHABET) for _ in range(SETUP_CODE_LENGTH))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _normalise_code(code: str) -> str:
+    return "".join(ch for ch in code.upper() if ch.isalnum())
+
+
 def _now() -> int:
     return int(time.time())
 
@@ -169,20 +195,61 @@ class AccountStore:
         with self._tx() as db:
             return int(db.execute("SELECT COUNT(*) FROM users").fetchone()[0])
 
-    def sign_up(self, name: str, email: str, password_hash: str) -> User:
+    def sign_up(
+        self,
+        name: str,
+        email: str,
+        password_hash: str,
+        *,
+        setup_code: str | None = None,
+        trusted: bool = True,
+    ) -> User:
         """Create an account from the sign-up page.
 
         The first account is the admin, whatever the settings say: someone has
         to be able to approve the others. After that, sign-ups follow the
         admin's settings.
+
+        Becoming admin is the one thing here worth stealing, and on a network
+        that trusts its members the first visitor to the page would win it. So
+        unless the request is ``trusted`` (it came from the PC itself), the first
+        account must present the setup code that PC printed. The check shares a
+        transaction with deciding who is first, so two sign-ups cannot both pass.
         """
         with self._tx() as db:
             first = db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
             settings = self._settings(db)
             if not first and not settings.signup_enabled:
                 raise AccountError(403, "new sign-ups are turned off; ask the admin for an account")
+            if first and not trusted:
+                expected = self._setup_code(db)
+                given = _normalise_code(setup_code or "")
+                if not hmac.compare_digest(given.encode(), _normalise_code(expected).encode()):
+                    raise SetupCodeError
             role: Role = "admin" if first else settings.default_role
-            return self._insert_user(db, name, email, password_hash, role)
+            user = self._insert_user(db, name, email, password_hash, role)
+            if first:
+                db.execute("DELETE FROM settings WHERE key = 'setup_code'")
+            return user
+
+    def setup_code(self) -> str | None:
+        """The code the first account needs from another device; None once one exists.
+
+        Made when first asked for and kept until the first account is created,
+        so it survives a restart between printing it and using it.
+        """
+        with self._tx() as db:
+            if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] != 0:
+                return None
+            return self._setup_code(db)
+
+    def _setup_code(self, db: sqlite3.Connection) -> str:
+        row = db.execute("SELECT value FROM settings WHERE key = 'setup_code'").fetchone()
+        if row is not None:
+            return str(row["value"])
+        code = _new_setup_code()
+        db.execute("INSERT INTO settings (key, value) VALUES ('setup_code', ?)", (code,))
+        return code
 
     def add_user(self, name: str, email: str, password_hash: str, role: Role) -> User:
         """Create an account on an admin's behalf."""
@@ -423,4 +490,12 @@ def _int(value: Any, fallback: int) -> int:
     return int(value)
 
 
-__all__ = ["AccountError", "AccountStore", "AuthSettings", "Role", "User", "token_hash"]
+__all__ = [
+    "AccountError",
+    "AccountStore",
+    "AuthSettings",
+    "Role",
+    "SetupCodeError",
+    "User",
+    "token_hash",
+]

@@ -285,6 +285,35 @@ def plan(
         typer.echo(f"    --rpc {','.join(endpoints)}")
 
 
+@app.command("admin-code")
+def admin_code(config: ConfigOption = DEFAULT_CONFIG) -> None:
+    """Print the code that lets the first (admin) account be created from another device.
+
+    Creating the first account from this PC's own browser needs no code. From
+    anywhere else on the network it does, so that whoever reaches the page first
+    cannot take the admin account. Once an account exists the code is gone.
+    """
+    from huddle.accounts.store import AccountStore
+
+    settings = _load(config)
+    if not settings.accounts.enabled:
+        typer.echo("Accounts are turned off on this PC (accounts.enabled: false).")
+        raise typer.Exit(code=0)
+    store = AccountStore(settings.accounts.db)
+    try:
+        store.open()
+        code = store.setup_code()
+    except Exception as exc:
+        typer.secho(f"cannot read {settings.accounts.db}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        store.close()
+    if code is None:
+        typer.echo("An account already exists, so no setup code is needed.")
+    else:
+        typer.echo(code)
+
+
 @app.command()
 def discover(
     config: ConfigOption = DEFAULT_CONFIG,

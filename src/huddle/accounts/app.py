@@ -20,6 +20,7 @@ import hmac
 import logging
 import re
 import time
+from functools import partial
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,7 +28,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from huddle.accounts.passwords import hash_password, verify_password
-from huddle.accounts.store import AccountError, AccountStore, AuthSettings, Role, User
+from huddle.accounts.store import (
+    AccountError,
+    AccountStore,
+    AuthSettings,
+    Role,
+    SetupCodeError,
+    User,
+)
 from huddle.config import AccountsConfig
 
 log = logging.getLogger("huddle.accounts")
@@ -63,6 +71,8 @@ class SignUpBody(BaseModel):
     name: str = Field(max_length=100)
     email: str = Field(max_length=254)
     password: str = Field(min_length=8, max_length=256)
+    # Only the first account, and only from another device, needs one.
+    setup_code: str | None = Field(default=None, max_length=64)
 
     _check_name = field_validator("name")(_name)
     _check_email = field_validator("email")(_email)
@@ -121,6 +131,8 @@ class AuthConfigResponse(BaseModel):
     signup_enabled: bool = False
     # No account exists yet: the next sign-up becomes the admin.
     first_user: bool = False
+    # ...and this visitor is not on the PC itself, so it must show the setup code.
+    setup_code_required: bool = False
 
 
 class SessionResponse(BaseModel):
@@ -144,10 +156,19 @@ class Accounts:
         # only costs sign-in, and the routes say why.
         try:
             await asyncio.to_thread(self.store.open)
+            code = await asyncio.to_thread(self.store.setup_code)
         except Exception as exc:
             log.error("accounts: cannot open %s: %s", self.config.db, exc)
             return
         self.available = True
+        if code:
+            # Whoever can read this log owns the PC, which is exactly who may
+            # create the first (admin) account from another device.
+            log.warning(
+                "accounts: no account exists yet. Create the first one on this PC, or from "
+                "another device with the setup code %s (`huddle admin-code` shows it again)",
+                code,
+            )
 
     async def close(self) -> None:
         await asyncio.to_thread(self.store.close)
@@ -186,6 +207,19 @@ class Accounts:
 
 def _client(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+
+LOOPBACK = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+
+
+def _on_this_pc(request: Request) -> bool:
+    """Did the request come from the PC running Huddle?
+
+    The connection's own address, never a forwarded header, which anyone could
+    forge. Behind a reverse proxy on the same PC every request looks local, so
+    such a setup gets no setup-code protection; the README says so.
+    """
+    return _client(request) in LOOPBACK
 
 
 async def _json[M: BaseModel](request: Request, model: type[M], limit: int = 2**20) -> M:
@@ -235,7 +269,7 @@ def build_router(accounts: Accounts | None) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["accounts"], dependencies=[Depends(_same_origin)])
 
     @router.get("/auth/config")
-    async def auth_config() -> AuthConfigResponse:
+    async def auth_config(request: Request) -> AuthConfigResponse:
         """What the sign-in page should offer. Public: it is asked before signing in."""
         if accounts is None:
             return AuthConfigResponse(enabled=False)
@@ -247,6 +281,7 @@ def build_router(accounts: Accounts | None) -> APIRouter:
             enabled=True,
             signup_enabled=settings.signup_enabled or users == 0,
             first_user=users == 0,
+            setup_code_required=users == 0 and not _on_this_pc(request),
         )
 
     if accounts is None:
@@ -285,9 +320,31 @@ def build_router(accounts: Accounts | None) -> APIRouter:
 
     @router.post("/auth/signup")
     async def sign_up(request: Request, response: Response) -> SessionResponse:
+        address = _client(request)
+        if accounts.throttled(address):
+            raise HTTPException(
+                status_code=429, detail="too many failed attempts; try again in a few minutes"
+            )
         body = await _json(request, SignUpBody)
         password_hash = await asyncio.to_thread(hash_password, body.password)
-        user: User = await run(store.sign_up, body.name, body.email, password_hash)
+        try:
+            user: User = await asyncio.to_thread(
+                partial(
+                    store.sign_up,
+                    body.name,
+                    body.email,
+                    password_hash,
+                    setup_code=body.setup_code,
+                    trusted=_on_this_pc(request),
+                )
+            )
+        except SetupCodeError as exc:
+            # Counts against the same limit as a wrong password: the code is
+            # short enough to type, so it must not be guessable at LAN speed.
+            accounts.failed(address)
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except AccountError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         log.info("accounts: %s signed up as %s", user.email, user.role)
         _set_cookie(response, request, await run(store.create_session, user.id, lifetime), lifetime)
         return SessionResponse(user=user)
