@@ -98,7 +98,10 @@ no longer exercised here.
   live cluster.
 
 - **Accounts** — sign-in for the web UI, as Open WebUI does it: the first
-  account created is the admin; later sign-ups wait as *pending* until the
+  account created is the admin. Made from the PC itself it needs nothing; from
+  another device it needs a one-time setup code (`huddle admin-code`, also in
+  the service log), so whoever reaches the page first on the network cannot
+  take the admin account. Later sign-ups wait as *pending* until the
   admin approves them in the Admin Panel, where the admin can also add, edit
   and remove users, turn sign-ups off, or let new accounts in directly. Each
   user's chat history is kept on the PC serving the page, in one SQLite file
@@ -125,6 +128,7 @@ time, and every node boundary costs a network round trip per token.
 huddle doctor      # checks this PC, its peers and the live cluster
 huddle discover    # lists the Huddle PCs on this network
 huddle plan        # shows how a model's layers would be split
+huddle admin-code  # the code the first account needs when made from another device
 huddle tui         # terminal dashboard: monitor, control, download models
 huddle setup       # re-run the install steps (what install.sh ends with)
 ```
@@ -143,8 +147,10 @@ uv run pytest && uv run ruff check && uv run mypy
 
 `HUDDLE_SOURCE=path/to/checkout sh install.sh` installs a working tree instead
 of the GitHub release. `scripts/bootstrap-node.sh` builds llama.cpp from source
-at the pinned commit (`src/huddle/llamacpp.pin`) for what the prebuilt release
-does not cover, such as CUDA; every node must run the same build.
+at the pinned commit (`src/huddle/llamacpp.pin`). `huddle setup` installs
+upstream's Vulkan build only; upstream's release page also lists Linux CUDA,
+ROCm and CPU builds, which Huddle does not install yet. Whatever a node runs,
+every node must run the same llama.cpp commit.
 
 `scripts/gpu-watch.py` shows GPU memory held by llama.cpp on each node,
 separately from desktop applications.
@@ -169,7 +175,10 @@ out of the cluster: model loading and the node routes stay open to the
 network, and `/v1/*` stays open unless `api.api_key` is set. Passwords are
 stored as scrypt hashes and sessions by their hash, but the page is plain HTTP,
 so a password crosses the network unencrypted — another reason to keep Huddle
-on a network you trust.
+on a network you trust. The setup code treats a request as coming from "this
+PC" by its connection address; behind a reverse proxy on the same PC every
+request looks local, so there the first account is open to whoever gets there
+first — create it before exposing the page.
 
 ## Tests
 
