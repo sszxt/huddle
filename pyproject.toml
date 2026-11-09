@@ -3,6 +3,17 @@ name = "huddle"
 version = "0.2.0"
 description = "Run LLMs across a cluster of Linux machines"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["llm", "llama.cpp", "gguf", "inference", "cluster", "vulkan", "openai-api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -15,6 +26,11 @@ dependencies = [
     "rich>=13.7",
     "huggingface_hub>=1.0,<2.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/sszxt/huddle"
+Issues = "https://github.com/sszxt/huddle/issues"
+Changelog = "https://github.com/sszxt/huddle/blob/main/CHANGELOG.md"
 
 [project.scripts]
 huddle = "huddle.cli:app"
