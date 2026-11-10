@@ -31,6 +31,10 @@ told and nothing more.
 - The first sign-up could be taken by anyone on the network (see
   `huddle admin-code` above).
 - A dead model server surfaced as a bare 500.
+- A corrupt or hostile `.gguf` header could make Huddle raise an unexpected
+  error or try to allocate gigabytes (a lying length, a layer count of a
+  billion, arrays nested thousands deep). It is now refused with a plain
+  "not a readable GGUF" error. Found by fuzzing the parser.
 - `huddle plan` now shows the placement a start would use: it applies
   `planner.reserve_mib` and drops peers that were given no layers.
 - A GPU reporting 0 MiB free was planned as if its whole memory were free.

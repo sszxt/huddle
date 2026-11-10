@@ -10,6 +10,7 @@ Format reference: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 from __future__ import annotations
 
+import math
 import re
 import struct
 from dataclasses import dataclass, field
@@ -24,6 +25,15 @@ DEFAULT_ALIGNMENT = 32
 # run to six figures). We consume them to stay in sync with the stream, but do
 # not keep them.
 MAX_KEPT_ARRAY = 1024
+
+# A header is untrusted input: a corrupt download, or a file dropped into the
+# models directory. These bounds turn a malformed one into a GGUFError rather
+# than an allocation of gigabytes or a stack overflow. They are generous: real
+# models have at most a few hundred blocks, and ggml tensors have four
+# dimensions; arrays inside arrays do not occur in practice.
+MAX_LAYERS = 10_000
+MAX_DIMENSIONS = 8
+MAX_ARRAY_NESTING = 8
 
 # ggml block and type sizes, dumped from the pinned llama.cpp build via
 # ggml_blck_size()/ggml_type_size() rather than transcribed from memory.
@@ -106,7 +116,7 @@ LLAMA_FTYPES: dict[int, str] = {
     39: "NVFP4",
 }
 
-_LAYER_TENSOR = re.compile(r"^blk\.(\d+)\.")
+_LAYER_TENSOR = re.compile(r"^blk\.(\d{1,9})\.")
 
 
 class GGUFError(ValueError):
@@ -225,12 +235,22 @@ class _Reader:
 
     def __init__(self, stream: BinaryIO) -> None:
         self.stream = stream
+        start = stream.tell()
+        self.size = stream.seek(0, 2)
+        stream.seek(start)
+
+    def _need(self, size: int) -> None:
+        """Refuse to go past the end of the file.
+
+        Lengths in a header are claims. Checking them against the bytes that are
+        really there stops a lying length from allocating or seeking beyond them.
+        """
+        if size > self.size - self.stream.tell():
+            raise GGUFError("unexpected end of file while reading header")
 
     def read(self, size: int) -> bytes:
-        data = self.stream.read(size)
-        if len(data) != size:
-            raise GGUFError("unexpected end of file while reading header")
-        return data
+        self._need(size)
+        return self.stream.read(size)
 
     def scalar(self, value_type: int) -> int | float | bool:
         fmt = _SCALAR_FORMATS.get(value_type)
@@ -249,23 +269,26 @@ class _Reader:
         return self.read(self.u64()).decode("utf-8", errors="replace")
 
     def skip(self, size: int) -> None:
+        self._need(size)
         self.stream.seek(size, 1)
 
 
-def _read_value(reader: _Reader, value_type: int) -> object:
+def _read_value(reader: _Reader, value_type: int, depth: int = 0) -> object:
     if value_type == ValueType.STRING:
         return reader.string()
     if value_type == ValueType.ARRAY:
-        return _read_array(reader)
+        return _read_array(reader, depth + 1)
     return reader.scalar(value_type)
 
 
-def _read_array(reader: _Reader) -> list[object] | int:
+def _read_array(reader: _Reader, depth: int = 1) -> list[object] | int:
     """Read an array, discarding oversized ones but staying in sync.
 
     Returns the element count instead of the values when the array is too large
     to be configuration, so callers can tell the difference.
     """
+    if depth > MAX_ARRAY_NESTING:
+        raise GGUFError("metadata arrays are nested too deeply")
     element_type = reader.u32()
     count = reader.u64()
 
@@ -276,7 +299,7 @@ def _read_array(reader: _Reader) -> list[object] | int:
                 reader.skip(reader.u64())
         elif element_type == ValueType.ARRAY:
             for _ in range(count):
-                _read_array(reader)
+                _read_array(reader, depth + 1)
         else:
             fmt = _SCALAR_FORMATS.get(element_type)
             if fmt is None:
@@ -284,11 +307,15 @@ def _read_array(reader: _Reader) -> list[object] | int:
             reader.skip(struct.calcsize(fmt) * count)
         return count
 
-    return [_read_value(reader, element_type) for _ in range(count)]
+    return [_read_value(reader, element_type, depth) for _ in range(count)]
 
 
 def _as_int(value: object) -> int | None:
-    return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return int(value)
 
 
 def read_gguf(path: str | Path) -> ModelInfo:
@@ -318,6 +345,8 @@ def read_gguf(path: str | Path) -> ModelInfo:
         for _ in range(tensor_count):
             name = reader.string()
             n_dims = reader.u32()
+            if n_dims > MAX_DIMENSIONS:
+                raise GGUFError(f"tensor {name!r} claims {n_dims} dimensions")
             dimensions = tuple(reader.u64() for _ in range(n_dims))
             tensors.append(
                 TensorInfo(
@@ -334,6 +363,8 @@ def read_gguf(path: str | Path) -> ModelInfo:
         return _as_int(metadata.get(f"{architecture}.{suffix}"))
 
     n_layers = arch_key("block_count") or 0
+    if not 0 <= n_layers <= MAX_LAYERS:
+        raise GGUFError(f"implausible block count {n_layers} in {path}")
     layer_bytes = [0] * n_layers
     overhead = 0
     total = 0
