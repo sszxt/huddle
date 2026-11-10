@@ -28,4 +28,8 @@ jobs:
 
       # Everything here runs against the fake llama.cpp binaries in tests/fakes;
       # a green run says the code does what it was told, not that a cluster works.
-      - run: uv run pytest -q
+      - run: uv run pytest -q --cov=huddle
+
+      # Which lines the fakes never reach, on the run's summary page.
+      - name: Coverage summary
+        run: uv run coverage report --format=markdown --skip-covered >> "$GITHUB_STEP_SUMMARY"

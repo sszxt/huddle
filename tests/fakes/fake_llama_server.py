@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import struct
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -180,6 +181,37 @@ def local_device_ids() -> list[str]:
     ]
 
 
+def f32(value: float) -> float:
+    """Round to the nearest 32-bit float, as the C++ below computes in ``float``."""
+    return float(struct.unpack("f", struct.pack("f", value))[0])
+
+
+def split_points(weights: list[float]) -> list[float]:
+    """The cumulative split points llama.cpp builds from ``--tensor-split``.
+
+    Same order of operations as ``llama_model::load_tensors`` (b10976): running
+    sums of the raw weights first, then each divided by the grand total, all in
+    ``float``. For integer weights the sums are exact, so the last point is 1.0.
+    """
+    sums, running = [], 0.0
+    for weight in weights:
+        running = f32(running + weight)
+        sums.append(running)
+    total = running or 1.0
+    return [f32(s / total) for s in sums]
+
+
+def device_for_entry(weights: list[float], position: int, offloaded: int) -> int:
+    """Which device holds the ``position``-th offloaded entry (0-based).
+
+    llama.cpp takes ``upper_bound`` of ``position / offloaded`` over the split
+    points: the first device whose point is strictly greater.
+    """
+    fraction = f32(position / offloaded)
+    points = split_points(weights)
+    return next((k for k, point in enumerate(points) if point > fraction), len(points) - 1)
+
+
 def placement_lines(args: argparse.Namespace) -> list[str]:
     """Layer assignment output, following llama.cpp's layer-split rule."""
     try:
@@ -204,19 +236,11 @@ def placement_lines(args: argparse.Namespace) -> list[str]:
         names = [f"RPC{i}" for i in range(max(remote, 0))] + local
         names = names[: len(weights)]
 
-    total_weight = sum(weights) or 1.0
-    cumulative, running = [], 0.0
-    for weight in weights:
-        running += weight / total_weight
-        cumulative.append(running)
-
     lines = []
     for layer in range(total):
         device = "CPU"
         if layer >= first_gpu and offloaded:
-            fraction = (layer - first_gpu) / offloaded
-            index = next((k for k, c in enumerate(cumulative) if fraction < c), len(names) - 1)
-            device = names[index]
+            device = names[device_for_entry(weights, layer - first_gpu, offloaded)]
         lines.append(
             f"0.00.000.000 D load_tensors: layer {layer:3} assigned to device {device}, is_swa = 0"
         )

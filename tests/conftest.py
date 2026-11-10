@@ -9,12 +9,18 @@ from typing import Any
 
 import httpx
 import pytest
+from hypothesis import settings
 
 from huddle.app import create_app
 from huddle.config import HuddleConfig
 from tests.fakes.gguf_builder import write_gguf
 
 FAKES_DIR = Path(__file__).parent / "fakes"
+
+# The property tests are pure arithmetic, so a few hundred cases take seconds.
+# No deadline: a loaded CI runner or a slow dev PC is not a failing property.
+settings.register_profile("huddle", max_examples=300, deadline=None)
+settings.load_profile("huddle")
 
 
 @pytest.fixture(autouse=True)
